@@ -1366,15 +1366,11 @@ async function loadLiveMarkets(forceRefresh = false): Promise<LiveMatch[]> {
     activeFeedSource = 'market-feed';
   }
 
-  // Sort: live first, then Today before Tomorrow, then Fútbol (primary) first, then kickoff time
+  // Sort all matches across all sports strictly in chronological kickoff order
   merged.sort((a, b) => {
-    if (a.status === 'live' && b.status !== 'live') return -1;
-    if (a.status !== 'live' && b.status === 'live') return 1;
-    if (a.matchDay === 'today' && b.matchDay === 'tomorrow') return -1;
-    if (a.matchDay === 'tomorrow' && b.matchDay === 'today') return 1;
-    if (a.sport === 'soccer' && b.sport !== 'soccer') return -1;
-    if (a.sport !== 'soccer' && b.sport === 'soccer') return 1;
-    return new Date(a.kickoffTime).getTime() - new Date(b.kickoffTime).getTime();
+    const timeDiff = new Date(a.kickoffTime).getTime() - new Date(b.kickoffTime).getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return a.id.localeCompare(b.id);
   });
 
   cachedMatches = merged;

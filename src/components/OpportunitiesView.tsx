@@ -124,7 +124,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
     });
   }, [todayTomorrowPicks, dayFilter, sportFilter, onlyPositiveEv, minConsensus, searchQuery, timeZone]);
 
-  // Group qualifying picks into individual Match Cards (1 card per match, ordered by highest +EV)
+  // Group qualifying picks into individual Match Cards (1 card per match, ordered strictly by kickoff schedule across all sports)
   const matchGroups = useMemo<MatchGroup[]>(() => {
     const byMatch = new Map<string, EvaluatedPick[]>();
     for (const p of filteredPicks) {
@@ -146,7 +146,12 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
       });
     }
 
-    groups.sort((a, b) => b.bestPick.ev - a.bestPick.ev);
+    groups.sort((a, b) => {
+      const timeDiff =
+        new Date(a.match.kickoffTime).getTime() - new Date(b.match.kickoffTime).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return b.bestPick.ev - a.bestPick.ev;
+    });
     return groups;
   }, [filteredPicks]);
 
