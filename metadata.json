@@ -1,0 +1,6 @@
+{
+  "name": "LambdaQuant",
+  "description": "Analizador cuantitativo de totales de goles basado en modelos Poisson y Dixon-Coles con detección de valor (+EV), gestión automatizada de bankroll, alertas push y reportes PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
