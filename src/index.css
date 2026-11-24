@@ -11,6 +11,12 @@
     font-family: var(--font-sans);
     scroll-behavior: smooth;
     overflow-x: clip;
+    background-color: #f3f6f8;
+    color-scheme: light;
+  }
+
+  body {
+    background-color: transparent;
   }
 
   html.dark {
@@ -29,8 +35,57 @@
 }
 
 /* ==========================================================================
-   Dynamic Animated Light Orbs Backdrop (Dark Mode)
+   Dynamic Animated Light Orbs Backdrop (Light & Dark Modes)
    ========================================================================== */
+.light-orbs-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background: linear-gradient(180deg, #f6f8fa 0%, #eef2f5 100%);
+}
+
+.light-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(115px);
+  will-change: transform;
+}
+
+.light-orb-lime {
+  width: 580px;
+  height: 580px;
+  top: -150px;
+  left: -120px;
+  background: radial-gradient(circle, #abf43f 0%, rgba(171, 244, 63, 0.34) 55%, transparent 76%);
+  opacity: 0.24;
+  animation: orbFloatLime 18s ease-in-out infinite alternate;
+  animation-delay: 0s;
+}
+
+.light-orb-cyan {
+  width: 620px;
+  height: 620px;
+  top: 26%;
+  left: 34%;
+  background: radial-gradient(circle, #3ff4e5 0%, rgba(63, 244, 229, 0.32) 55%, transparent 76%);
+  opacity: 0.22;
+  animation: orbFloatCyan 19s ease-in-out infinite alternate;
+  animation-delay: -6s;
+}
+
+.light-orb-lime-secondary {
+  width: 600px;
+  height: 600px;
+  bottom: -160px;
+  right: -120px;
+  background: radial-gradient(circle, #abf43f 0%, rgba(171, 244, 63, 0.3) 55%, transparent 76%);
+  opacity: 0.2;
+  animation: orbFloatSecondary 17s ease-in-out infinite alternate;
+  animation-delay: -11s;
+}
+
 .dark-orbs-backdrop {
   position: fixed;
   inset: 0;
@@ -117,21 +172,84 @@
 }
 
 /* ==========================================================================
-   Glassmorphism Cards + Hover Scale (Zoom-in) in Dark Mode
+   Glassmorphism Cards + Hover Scale (Zoom-in) — Light Mode & Dark Mode
    ========================================================================== */
-.dark .glass-card {
+.glass-card {
   position: relative;
   z-index: 1;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.62);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 4px 16px -4px rgba(15, 23, 42, 0.06);
   transition:
     transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1),
     border-color 0.3s cubic-bezier(0.22, 1, 0.36, 1),
     background 0.3s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
+}
+
+.glass-card:hover {
+  transform: scale(1.07);
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.86);
+  border-top-color: #abf43f;
+  box-shadow:
+    inset 0 1.5px 0 rgba(171, 244, 63, 0.9),
+    0 12px 28px -4px rgba(171, 244, 63, 0.3),
+    0 22px 44px -14px rgba(15, 23, 42, 0.16);
+}
+
+.glass-card-active {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(15, 23, 42, 0.12);
+  border-top-color: #abf43f;
+  box-shadow:
+    inset 0 1.5px 0 rgba(171, 244, 63, 0.95),
+    0 8px 24px -6px rgba(171, 244, 63, 0.28),
+    0 10px 22px -12px rgba(15, 23, 42, 0.12);
+}
+
+/* Frosted glass shell for side menu, top header, and inspector drawer (Light Mode) */
+.glass-surface {
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+/* Frosted glass panels for dense tables, charts, and toolbars (Light Mode) */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 4px 16px -4px rgba(15, 23, 42, 0.05);
+  transition:
+    border-color 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.glass-panel-hover:hover {
+  background: rgba(255, 255, 255, 0.8);
+  border-top-color: #abf43f;
+  box-shadow:
+    inset 0 1.5px 0 rgba(171, 244, 63, 0.85),
+    0 12px 28px -6px rgba(171, 244, 63, 0.24),
+    0 18px 36px -12px rgba(15, 23, 42, 0.12);
+}
+
+/* Dark Mode Glassmorphism Overrides */
+.dark .glass-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
 }
 
 .dark .glass-card:hover {
@@ -145,16 +263,24 @@
     0 24px 48px -12px rgba(0, 0, 0, 0.8);
 }
 
-/* Frosted glass panels for dense tables, charts, and toolbars in Dark Mode */
+.dark .glass-card-active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
+  border-top-color: #abf43f;
+  box-shadow:
+    inset 0 1px 0 rgba(171, 244, 63, 0.6),
+    0 8px 24px -6px rgba(171, 244, 63, 0.22);
+}
+
+.dark .glass-surface {
+  background: rgba(15, 15, 18, 0.62);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
 .dark .glass-panel {
   background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  transition:
-    border-color 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-    background 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: none;
 }
 
 .dark .glass-panel-hover:hover {
@@ -186,17 +312,105 @@
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.55);
+  background: rgba(171, 244, 63, 0.6);
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
   background: rgba(171, 244, 63, 0.45);
 }
 
+/* ==========================================================================
+   Mobile Floating "Liquid Glass" Pill Navigation (< 768px) & Slide-over Drawer
+   ========================================================================== */
+.liquid-glass-nav {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 50;
+  height: 64px;
+  border-radius: 9999px;
+  background: rgba(22, 26, 24, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.65),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.28),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.08);
+  overflow: visible;
+}
+
+.liquid-glass-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 44px;
+  min-height: 48px;
+  height: 54px;
+  border-radius: 9999px;
+  color: #d4d4d8;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  background-color: transparent;
+  border: 1px solid transparent;
+  transition:
+    transform 0.2s ease,
+    background-color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.liquid-glass-item:active {
+  transform: scale(0.95);
+}
+
+.liquid-glass-item-active {
+  height: 66px;
+  margin-top: -2px;
+  margin-bottom: -2px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.08) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.4),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.45);
+  color: #abf43f;
+  font-weight: 600;
+  transform: translateY(-1px);
+}
+
+.mobile-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.mobile-drawer-panel {
+  background: rgba(12, 12, 12, 0.94);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  z-index: 60;
+}
+
+@media (max-width: 767px) {
+  .mobile-safe-bottom {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .light-orb,
   .dark-orb {
     animation: none !important;
   }
+  .glass-card:hover,
   .dark .glass-card:hover {
     transform: none !important;
   }

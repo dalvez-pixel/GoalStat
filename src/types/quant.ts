@@ -175,15 +175,130 @@ export interface EvaluatedPick {
   consensusCount: number; // How many of the 4 base models agree EV > 0
 }
 
+export type MarketCategory = 'totals' | 'btts' | '1x2' | 'asian-handicap' | 'parlay';
+
+export type SelectionKey =
+  | 'over'
+  | 'under'
+  | 'btts_yes'
+  | 'btts_no'
+  | 'home'
+  | 'draw'
+  | 'away'
+  | 'ah_home'
+  | 'ah_away'
+  | 'parlay';
+
+export interface DerivedSoccerOption {
+  optionId: string;
+  marketType: Exclude<MarketCategory, 'totals' | 'parlay'>;
+  selectionKey: Exclude<SelectionKey, 'over' | 'under' | 'parlay'>;
+  label: string;
+  shortLabel: string;
+  line: number; // 0 for 1X2/BTTS, handicap value for AH (e.g. -0.5, +0.5, -1)
+  odds: number;
+  modelProb: number;
+  pushProb: number;
+  impliedProb: number;
+  fairOdds: number;
+  edge: number;
+  ev: number;
+  kellyFull: number;
+  recommendedStake: number;
+  bookmaker: string;
+}
+
+export interface SoccerDerivedMarkets {
+  oneXTwo: DerivedSoccerOption[]; // [home, draw, away]
+  btts: DerivedSoccerOption[]; // [yes, no]
+  asianHandicap: {
+    homeLine: number;
+    options: DerivedSoccerOption[]; // [ah_home, ah_away]
+  };
+}
+
+export interface ParlayLeg {
+  id: string;
+  matchId: string;
+  sport: SportId;
+  league: string;
+  matchLabel: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeLogo?: string;
+  awayLogo?: string;
+  marketType: Exclude<MarketCategory, 'parlay'>;
+  selectionKey: Exclude<SelectionKey, 'parlay'>;
+  marketLabel: string;
+  line: number;
+  bookmaker: string;
+  odds: number;
+  modelProb: number;
+  pushProb: number;
+  ev: number;
+  modelType: ModelType;
+  // Snapshot of match scoring rates so same-game correlation can be computed exactly from the joint matrix
+  homeLambda: number;
+  awayLambda: number;
+  homeElo: number;
+  awayElo: number;
+  bivariateCov: number;
+  rho: number;
+  alpha: number;
+  mlFeatures: MatchMlFeatures;
+}
+
+export interface SettlementProposal {
+  betId: string;
+  suggestedStatus: Exclude<BetStatus, 'pending'>;
+  homeScore: number;
+  awayScore: number;
+  scoreLabel: string;
+  closingOdds: number;
+  reason: string;
+  matchedEvent: string;
+}
+
+export interface FinishedAuditMatch {
+  id: string;
+  sport: SportId;
+  league: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeLogo?: string;
+  awayLogo?: string;
+  homeAbbr?: string;
+  awayAbbr?: string;
+  homeColor?: string;
+  awayColor?: string;
+  kickoffTime: string;
+  homeScore: number;
+  awayScore: number;
+  homeLambda: number;
+  awayLambda: number;
+  homeElo: number;
+  awayElo: number;
+  bivariateCov: number;
+  rho: number;
+  alpha: number;
+  mlFeatures: MatchMlFeatures;
+  marketLine: MarketLine;
+}
+
 export interface BetRecord {
   id: string;
   date: string;
   monthKey: string; // YYYY-MM
   sport: SportId;
   league: string;
+  matchId?: string;
   matchLabel: string;
   side: BetSide;
   line: number;
+  marketType?: MarketCategory;
+  selectionKey?: SelectionKey;
+  marketLabel?: string;
+  finalScore?: string;
   bookmaker: string;
   odds: number;
   closingOdds: number;

@@ -324,10 +324,8 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                 return (
                   <article
                     key={alert.id}
-                    className={`glass-card rounded-xl border p-4 flex flex-col justify-between gap-3.5 ${
-                      alert.read
-                        ? 'border-slate-200 bg-white'
-                        : 'border-[#ABF43F] bg-[#ABF43F]/10 dark:border-t-[#ABF43F]'
+                    className={`glass-card rounded-xl p-4 flex flex-col justify-between gap-3.5 ${
+                      alert.read ? '' : 'glass-card-active'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">

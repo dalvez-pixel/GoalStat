@@ -843,3 +843,343 @@ export function evaluateAllMatches(
   }
   return picks.sort((a, b) => b.ev - a.ev);
 }
+
+function deterministicUnit(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (Math.abs(h) % 10000) / 10000;
+}
+
+function roundOdds(val: number): number {
+  return Math.max(1.06, Math.min(18.0, Math.round(val * 100) / 100));
+}
+
+/**
+ * Full discrete joint probability grid P(H=h, A=a) for low-scoring sports (Soccer / NHL)
+ * under any model including Ensemble. Used both for Soccer Derived Markets (1X2, BTTS, Asian Handicap)
+ * and exact Same-Game Parlay joint probability & correlation calculation.
+ */
+export function computeFullDiscreteGrid(
+  homeLambda: number,
+  awayLambda: number,
+  rho: number,
+  alpha: number,
+  bivariateCov: number,
+  homeElo: number,
+  awayElo: number,
+  mlFeatures: MatchMlFeatures,
+  modelType: ModelType,
+  sport: SportId
+): number[][] {
+  const maxGoals = sport === 'soccer' ? 10 : 12;
+
+  const buildSingle = (m: Exclude<ModelType, 'ensemble'>): number[][] => {
+    const eloCal = calibrateRatesWithElo(homeLambda, awayLambda, homeElo, awayElo, sport);
+    const mlParams =
+      m === 'ml-gbdt'
+        ? computeMlGbdtParameters(eloCal.calHome, eloCal.calAway, homeElo, awayElo, mlFeatures, sport)
+        : null;
+
+    const hMean =
+      m === 'bivariate-poisson-xg-elo'
+        ? eloCal.calHome
+        : m === 'ml-gbdt'
+          ? mlParams!.adjHomeLambda
+          : homeLambda;
+    const aMean =
+      m === 'bivariate-poisson-xg-elo'
+        ? eloCal.calAway
+        : m === 'ml-gbdt'
+          ? mlParams!.adjAwayLambda
+          : awayLambda;
+
+    const effectiveAlpha =
+      m === 'negative-binomial'
+        ? Math.max(0.01, alpha)
+        : m === 'ml-gbdt'
+          ? mlParams!.tailAlpha
+          : 0;
+    const effectiveRho = m === 'dixon-coles' ? rho : 0;
+    const useBiv = m === 'bivariate-poisson-xg-elo';
+
+    const grid: number[][] = [];
+    let total = 0;
+    for (let h = 0; h <= maxGoals; h++) {
+      grid[h] = [];
+      for (let a = 0; a <= maxGoals; a++) {
+        let p: number;
+        if (useBiv) {
+          p = bivariatePoissonPmf(h, a, hMean, aMean, bivariateCov);
+        } else if (effectiveAlpha > 0) {
+          p = negativeBinomialPmf(h, hMean, effectiveAlpha) * negativeBinomialPmf(a, aMean, effectiveAlpha);
+        } else {
+          const tau = effectiveRho !== 0 ? dixonColesTau(h, a, hMean, aMean, effectiveRho) : 1;
+          p = poissonPmf(h, hMean) * poissonPmf(a, aMean) * tau;
+        }
+        grid[h][a] = p;
+        total += p;
+      }
+    }
+
+    if (total > 0) {
+      for (let h = 0; h <= maxGoals; h++) {
+        for (let a = 0; a <= maxGoals; a++) {
+          grid[h][a] /= total;
+        }
+      }
+    }
+    return grid;
+  };
+
+  if (modelType !== 'ensemble') {
+    return buildSingle(modelType);
+  }
+
+  const gBiv = buildSingle('bivariate-poisson-xg-elo');
+  const gDc = buildSingle('dixon-coles');
+  const gNb = buildSingle('negative-binomial');
+  const gMl = buildSingle('ml-gbdt');
+
+  const out: number[][] = [];
+  for (let h = 0; h <= maxGoals; h++) {
+    out[h] = [];
+    for (let a = 0; a <= maxGoals; a++) {
+      out[h][a] = gBiv[h][a] * 0.35 + gDc[h][a] * 0.2 + gNb[h][a] * 0.2 + gMl[h][a] * 0.25;
+    }
+  }
+  return out;
+}
+
+/**
+ * Derives 1X2 (Moneyline), Ambos Anotan (BTTS), and Hándicap Asiático (AH)
+ * directly from the active bivariate goal matrix for soccer matches.
+ */
+export function computeSoccerDerivedMarkets(
+  match: LiveMatch,
+  modelType: ModelType,
+  currentBankroll: number,
+  bankrollConfig: BankrollConfig
+): import('../types/quant.ts').SoccerDerivedMarkets {
+  const grid = computeFullDiscreteGrid(
+    match.homeLambda,
+    match.awayLambda,
+    match.rho,
+    match.alpha,
+    match.bivariateCov,
+    match.homeElo,
+    match.awayElo,
+    match.mlFeatures,
+    modelType,
+    'soccer'
+  );
+
+  // Market reference matrix (slightly slower consensus Dixon-Coles without full Elo/cov calibration)
+  const marketGrid = computeFullDiscreteGrid(
+    match.homeLambda,
+    match.awayLambda,
+    match.rho * 0.4,
+    match.alpha,
+    match.bivariateCov * 0.45,
+    match.homeElo,
+    match.awayElo,
+    match.mlFeatures,
+    'dixon-coles',
+    'soccer'
+  );
+
+  const summarizeGrid = (g: number[][], ahHomeLine: number) => {
+    let homeWin = 0;
+    let draw = 0;
+    let awayWin = 0;
+    let bttsYes = 0;
+    let bttsNo = 0;
+    let ahHome = 0;
+    let ahAway = 0;
+    let ahPush = 0;
+
+    for (let h = 0; h < g.length; h++) {
+      for (let a = 0; a < g[h].length; a++) {
+        const p = g[h][a];
+        if (h > a) homeWin += p;
+        else if (h === a) draw += p;
+        else awayWin += p;
+
+        if (h >= 1 && a >= 1) bttsYes += p;
+        else bttsNo += p;
+
+        const diff = h - a + ahHomeLine;
+        if (Math.abs(diff) < 1e-6) ahPush += p;
+        else if (diff > 0) ahHome += p;
+        else ahAway += p;
+      }
+    }
+    return { homeWin, draw, awayWin, bttsYes, bttsNo, ahHome, ahAway, ahPush };
+  };
+
+  // Pick a clean half-goal or integer Asian Handicap line proportional to expected goal diff
+  const expectedDiff = match.homeLambda - match.awayLambda + (match.homeElo - match.awayElo) / 600;
+  let ahHomeLine = 0;
+  if (expectedDiff >= 1.15) ahHomeLine = -1.5;
+  else if (expectedDiff >= 0.72) ahHomeLine = -1.0;
+  else if (expectedDiff >= 0.28) ahHomeLine = -0.5;
+  else if (expectedDiff <= -1.15) ahHomeLine = 1.5;
+  else if (expectedDiff <= -0.72) ahHomeLine = 1.0;
+  else if (expectedDiff <= -0.28) ahHomeLine = 0.5;
+  else ahHomeLine = 0;
+
+  const modelStats = summarizeGrid(grid, ahHomeLine);
+  const mktStats = summarizeGrid(marketGrid, ahHomeLine);
+  const bookmaker = match.lines[0]?.bookmaker ?? 'Pinnacle';
+
+  const buildOption = (
+    marketType: '1x2' | 'btts' | 'asian-handicap',
+    selectionKey: 'home' | 'draw' | 'away' | 'btts_yes' | 'btts_no' | 'ah_home' | 'ah_away',
+    label: string,
+    shortLabel: string,
+    line: number,
+    modelProb: number,
+    pushProb: number,
+    marketFairProb: number,
+    vigFactor: number,
+    seedSuffix: string
+  ): import('../types/quant.ts').DerivedSoccerOption => {
+    const bias = (deterministicUnit(`${match.id}-${seedSuffix}`) - 0.5) * 0.085;
+    const adjMarketProb = Math.max(0.06, Math.min(0.92, marketFairProb + bias));
+    const odds = roundOdds(1 / (adjMarketProb * vigFactor));
+    const impliedProb = 1 / odds;
+    const loseProb = Math.max(0, 1 - modelProb - pushProb);
+    const ev = modelProb * (odds - 1) - loseProb;
+    const edge = modelProb - impliedProb;
+    const effWinProb = pushProb < 0.99 ? modelProb / (1 - pushProb) : modelProb;
+    const fairOdds = effWinProb > 0.005 ? 1 / effWinProb : 99;
+    const kellyFull = odds > 1 && ev > 0 ? Math.max(0, ev / (odds - 1)) : 0;
+    const { stake } = calculateStake(ev, kellyFull, currentBankroll, bankrollConfig);
+
+    return {
+      optionId: `${match.id}-${marketType}-${selectionKey}-${line}`,
+      marketType,
+      selectionKey,
+      label,
+      shortLabel,
+      line,
+      odds,
+      modelProb,
+      pushProb,
+      impliedProb,
+      fairOdds,
+      edge,
+      ev,
+      kellyFull,
+      recommendedStake: stake,
+      bookmaker,
+    };
+  };
+
+  const vig1x2 = 1.038;
+  const oneXTwo = [
+    buildOption(
+      '1x2',
+      'home',
+      `Gana ${match.homeTeam} (1)`,
+      '1 · Local',
+      0,
+      modelStats.homeWin,
+      0,
+      mktStats.homeWin,
+      vig1x2,
+      '1x2-home'
+    ),
+    buildOption(
+      '1x2',
+      'draw',
+      'Empate (X)',
+      'X · Empate',
+      0,
+      modelStats.draw,
+      0,
+      mktStats.draw,
+      vig1x2,
+      '1x2-draw'
+    ),
+    buildOption(
+      '1x2',
+      'away',
+      `Gana ${match.awayTeam} (2)`,
+      '2 · Visitante',
+      0,
+      modelStats.awayWin,
+      0,
+      mktStats.awayWin,
+      vig1x2,
+      '1x2-away'
+    ),
+  ];
+
+  const vigBtts = 1.035;
+  const btts = [
+    buildOption(
+      'btts',
+      'btts_yes',
+      'Ambos Anotan · Sí (BTTS)',
+      'BTTS Sí',
+      0,
+      modelStats.bttsYes,
+      0,
+      mktStats.bttsYes,
+      vigBtts,
+      'btts-yes'
+    ),
+    buildOption(
+      'btts',
+      'btts_no',
+      'Ambos Anotan · No (BTTS)',
+      'BTTS No',
+      0,
+      modelStats.bttsNo,
+      0,
+      mktStats.bttsNo,
+      vigBtts,
+      'btts-no'
+    ),
+  ];
+
+  const ahNonPushMkt = Math.max(0.1, mktStats.ahHome + mktStats.ahAway);
+  const fmtAh = (val: number) => (val > 0 ? `+${val.toFixed(1)}` : val === 0 ? '0.0' : val.toFixed(1));
+  const awayAhLine = ahHomeLine === 0 ? 0 : -ahHomeLine;
+  const vigAh = 1.028;
+
+  const asianHandicap = {
+    homeLine: ahHomeLine,
+    options: [
+      buildOption(
+        'asian-handicap',
+        'ah_home',
+        `${match.homeTeam} AH ${fmtAh(ahHomeLine)}`,
+        `Local ${fmtAh(ahHomeLine)}`,
+        ahHomeLine,
+        modelStats.ahHome,
+        modelStats.ahPush,
+        mktStats.ahHome / ahNonPushMkt,
+        vigAh,
+        'ah-home'
+      ),
+      buildOption(
+        'asian-handicap',
+        'ah_away',
+        `${match.awayTeam} AH ${fmtAh(awayAhLine)}`,
+        `Visit. ${fmtAh(awayAhLine)}`,
+        awayAhLine,
+        modelStats.ahAway,
+        modelStats.ahPush,
+        mktStats.ahAway / ahNonPushMkt,
+        vigAh,
+        'ah-away'
+      ),
+    ],
+  };
+
+  return { oneXTwo, btts, asianHandicap };
+}

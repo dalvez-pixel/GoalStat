@@ -178,7 +178,8 @@ export function exportMonthlyPdfReport(options: MonthlyReportOptions): void {
 
   const ledgerRows = bets.map((b) => {
     const d = new Date(b.date).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
-    const sideLabel = b.side === 'over' ? `Más ${b.line}` : `Menos ${b.line}`;
+    const sideLabel =
+      b.marketLabel ?? (b.side === 'over' ? `Más ${b.line}` : `Menos ${b.line}`);
     const statusLabel =
       b.status === 'won'
         ? 'Ganada'

@@ -10,12 +10,17 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { getChartTheme } from '../lib/chartTheme.ts';
 import { MODEL_META, SPORT_META } from '../types/quant.ts';
 import type { BetRecord, ModelType, SportId } from '../types/quant.ts';
+import { ModelOverlayD3Chart } from './ModelOverlayD3Chart.tsx';
 
 interface SportStatsViewProps {
+  theme: 'dark' | 'light';
   bets: BetRecord[];
   currencySymbol: string;
+  sportFilter?: SportId | 'all';
+  onChangeSportFilter?: (sport: SportId | 'all') => void;
 }
 
 const SPORT_IDS: SportId[] = ['soccer', 'nba', 'nhl', 'football'];
@@ -27,8 +32,23 @@ const MODEL_IDS: ModelType[] = [
   'ml-gbdt',
 ];
 
-export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySymbol }) => {
-  const [selectedSport, setSelectedSport] = useState<SportId | 'all'>('all');
+export const SportStatsView: React.FC<SportStatsViewProps> = ({
+  theme,
+  bets,
+  currencySymbol,
+  sportFilter,
+  onChangeSportFilter,
+}) => {
+  const chartTheme = useMemo(() => getChartTheme(theme), [theme]);
+  const [internalSport, setInternalSport] = useState<SportId | 'all'>('all');
+  const selectedSport = sportFilter ?? internalSport;
+  const setSelectedSport = (next: SportId | 'all') => {
+    if (onChangeSportFilter) {
+      onChangeSportFilter(next);
+    } else {
+      setInternalSport(next);
+    }
+  };
 
   const settled = useMemo(
     () => bets.filter((b) => b.status === 'won' || b.status === 'lost'),
@@ -146,7 +166,7 @@ export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySy
     <div className="space-y-6 overflow-visible">
       {/* Sport Selector Strip */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] dark:backdrop-blur-md border border-slate-200 dark:border-white/[0.08]">
+        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] backdrop-blur-md border border-slate-900/[0.08] dark:border-white/[0.08]">
           <button
             type="button"
             onClick={() => setSelectedSport('all')}
@@ -188,12 +208,10 @@ export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySy
               key={sm.sport}
               type="button"
               onClick={() =>
-                setSelectedSport((prev) => (prev === sm.sport ? 'all' : sm.sport))
+                setSelectedSport(selectedSport === sm.sport ? 'all' : sm.sport)
               }
-              className={`glass-card rounded-xl border p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
-                isFocused
-                  ? 'border-[#ABF43F] bg-[#ABF43F]/10 dark:border-t-[#ABF43F] dark:shadow-[inset_0_1px_0_rgba(171,244,63,0.6),0_10px_28px_-6px_rgba(171,244,63,0.2)]'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
+              className={`glass-card rounded-xl p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
+                isFocused ? 'glass-card-active' : ''
               }`}
             >
               <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
@@ -306,6 +324,9 @@ export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySy
         </section>
       )}
 
+      {/* Interactive D3 Multi-Model Overlay Line Chart (Yield & Brier Score Over Time) */}
+      <ModelOverlayD3Chart theme={theme} bets={bets} selectedSport={selectedSport} />
+
       {/* Charts Split: Yield by Sport + Model Benchmark Comparison */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 overflow-visible">
         <section className="glass-panel glass-panel-hover border border-slate-200 rounded-xl bg-white p-5">
@@ -318,29 +339,25 @@ export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySy
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={sportMetrics} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
                 <XAxis
                   dataKey="shortName"
-                  tick={{ fontSize: 11, fill: '#94A3B8' }}
+                  tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis
                   tickFormatter={(v: number) => `${v}%`}
-                  tick={{ fontSize: 11, fill: '#94A3B8' }}
+                  tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <Tooltip
+                  cursor={{ fill: chartTheme.cursorFill }}
                   formatter={(v: unknown) => [`${Number(v).toFixed(2)}%`, 'Yield']}
-                  contentStyle={{
-                    backgroundColor: 'rgba(12, 12, 14, 0.92)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: '10px',
-                    color: '#F8FAFC',
-                    fontSize: '12px',
-                    backdropFilter: 'blur(12px)',
-                  }}
+                  contentStyle={chartTheme.tooltipContentStyle}
+                  labelStyle={chartTheme.tooltipLabelStyle}
+                  itemStyle={chartTheme.tooltipItemStyle}
                 />
                 <Bar dataKey="yieldPct" radius={[4, 4, 0, 0]}>
                   {sportMetrics.map((entry) => (
@@ -365,31 +382,27 @@ export const SportStatsView: React.FC<SportStatsViewProps> = ({ bets, currencySy
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={modelMetrics} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
                 <XAxis
                   dataKey="shortName"
-                  tick={{ fontSize: 11, fill: '#94A3B8' }}
+                  tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis
                   tickFormatter={(v: number) => `${v}%`}
-                  tick={{ fontSize: 11, fill: '#94A3B8' }}
+                  tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <Tooltip
+                  cursor={{ fill: chartTheme.cursorFill }}
                   formatter={(v: unknown) => [`${Number(v).toFixed(2)}%`, 'Yield']}
-                  contentStyle={{
-                    backgroundColor: 'rgba(12, 12, 14, 0.92)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: '10px',
-                    color: '#F8FAFC',
-                    fontSize: '12px',
-                    backdropFilter: 'blur(12px)',
-                  }}
+                  contentStyle={chartTheme.tooltipContentStyle}
+                  labelStyle={chartTheme.tooltipLabelStyle}
+                  itemStyle={chartTheme.tooltipItemStyle}
                 />
-                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Legend wrapperStyle={{ ...chartTheme.legendStyle, fontSize: '11px' }} />
                 <Bar dataKey="yieldPct" name="Yield (%)" radius={[4, 4, 0, 0]}>
                   {modelMetrics.map((entry) => (
                     <Cell

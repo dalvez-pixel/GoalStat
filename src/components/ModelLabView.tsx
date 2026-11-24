@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { getChartTheme } from '../lib/chartTheme.ts';
 import { calculateStake, computeTotalsDistribution } from '../lib/dixonColes.ts';
 import { MODEL_META, SPORT_META } from '../types/quant.ts';
 import type {
@@ -22,6 +23,7 @@ import type {
 } from '../types/quant.ts';
 
 interface ModelLabViewProps {
+  theme: 'dark' | 'light';
   currentBankroll: number;
   bankrollConfig: BankrollConfig;
   currencySymbol: string;
@@ -146,11 +148,13 @@ const ALL_MODELS: ModelType[] = [
 ];
 
 export const ModelLabView: React.FC<ModelLabViewProps> = ({
+  theme,
   currentBankroll,
   bankrollConfig,
   currencySymbol,
   onLogCustomBet,
 }) => {
+  const chartTheme = useMemo(() => getChartTheme(theme), [theme]);
   const [sport, setSport] = useState<SportId>('soccer');
   const [homeTeam, setHomeTeam] = useState(SPORT_PRESETS.soccer.homeTeam);
   const [awayTeam, setAwayTeam] = useState(SPORT_PRESETS.soccer.awayTeam);
@@ -338,10 +342,10 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-visible">
       {/* Sport Preset Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] backdrop-blur-md border border-slate-900/[0.08] dark:border-white/[0.08]">
           {(['soccer', 'nba', 'nhl', 'football'] as SportId[]).map((sid) => (
             <button
               key={sid}
@@ -362,7 +366,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
           type="button"
           onClick={handleServerEvaluate}
           disabled={verifying}
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-white/[0.1] bg-white dark:bg-white/[0.04] dark:backdrop-blur-md text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.08] transition-colors whitespace-nowrap"
+          className="glass-card inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-xl text-slate-700 dark:text-slate-200 whitespace-nowrap"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${verifying ? 'animate-spin' : ''}`} />
           <span>Validar cálculo en API</span>
@@ -815,31 +819,28 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
             <div className="h-60 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
                   <XAxis
                     dataKey="modelo"
-                    tick={{ fontSize: 11, fill: '#94A3B8' }}
+                    tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <YAxis
                     domain={[0, 100]}
                     tickFormatter={(v: number) => `${v}%`}
-                    tick={{ fontSize: 11, fill: '#94A3B8' }}
+                    tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <Tooltip
+                    cursor={{ fill: chartTheme.cursorFill }}
                     formatter={(val: unknown) => [`${Number(val).toFixed(2)}%`]}
-                    contentStyle={{
-                      backgroundColor: 'rgba(12, 12, 14, 0.92)',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      borderRadius: '10px',
-                      color: '#F8FAFC',
-                      fontSize: '12px',
-                    }}
+                    contentStyle={chartTheme.tooltipContentStyle}
+                    labelStyle={chartTheme.tooltipLabelStyle}
+                    itemStyle={chartTheme.tooltipItemStyle}
                   />
-                  <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  <Legend wrapperStyle={chartTheme.legendStyle} />
                   <Bar dataKey="Más (%)" fill="#ABF43F" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Menos (%)" fill="#3FF4E5" radius={[4, 4, 0, 0]} />
                 </BarChart>

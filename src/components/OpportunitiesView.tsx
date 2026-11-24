@@ -2,6 +2,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Check,
+  Layers,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -9,7 +10,7 @@ import {
 import React, { useEffect, useMemo, useState } from 'react';
 import { classifyMatchDayInTimeZone, formatTime24h } from '../lib/timezone.ts';
 import { MODEL_META, SPORT_META } from '../types/quant.ts';
-import type { EvaluatedPick, LiveMatch, ModelType, SportId } from '../types/quant.ts';
+import type { EvaluatedPick, LiveMatch, ModelType, ParlayLeg, SportId } from '../types/quant.ts';
 import { TeamCrest } from './TeamCrest.tsx';
 
 interface OpportunitiesViewProps {
@@ -18,13 +19,17 @@ interface OpportunitiesViewProps {
   error: string | null;
   activeModel: ModelType;
   onChangeModel: (model: ModelType) => void;
+  sportFilter: SportId | 'all';
+  onChangeSportFilter: (sport: SportId | 'all') => void;
   liveOnlyView?: boolean;
   timeZone: string;
   tzLabel: string;
   currencySymbol: string;
+  parlayLegIds: Set<string>;
   onRefresh: () => void;
   onInspectPick: (pick: EvaluatedPick) => void;
   onQuickBet: (pick: EvaluatedPick) => void;
+  onToggleParlayLeg: (leg: ParlayLeg) => void;
 }
 
 interface MatchGroup {
@@ -57,15 +62,18 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
   error,
   activeModel,
   onChangeModel,
+  sportFilter,
+  onChangeSportFilter,
   liveOnlyView = false,
   timeZone,
   tzLabel,
   currencySymbol,
+  parlayLegIds,
   onRefresh,
   onInspectPick,
   onQuickBet,
+  onToggleParlayLeg,
 }) => {
-  const [sportFilter, setSportFilter] = useState<SportId | 'all'>('all');
   const [dayFilter, setDayFilter] = useState<DayFilter>(liveOnlyView ? 'live' : 'all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [onlyPositiveEv, setOnlyPositiveEv] = useState<boolean>(false);
@@ -169,7 +177,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
       {/* Model Switcher + Description Bar */}
       <section className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-lg bg-slate-200/70 dark:bg-white/[0.04] dark:border dark:border-white/[0.08] dark:backdrop-blur-md w-fit">
+          <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] border border-slate-900/[0.08] dark:border-white/[0.08] backdrop-blur-md w-fit">
             {MODEL_ORDER.map((mKey) => {
               const active = activeModel === mKey;
               return (
@@ -179,7 +187,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
                   onClick={() => onChangeModel(mKey)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
                     active
-                      ? 'bg-white text-slate-900 shadow-xs dark:bg-[#ABF43F] dark:text-neutral-950'
+                      ? 'bg-slate-900 text-white shadow-xs dark:bg-[#ABF43F] dark:text-neutral-950'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
                   }`}
                 >
@@ -197,7 +205,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
           type="button"
           onClick={onRefresh}
           disabled={loading}
-          className="self-start lg:self-center inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-white/[0.1] bg-white dark:bg-white/[0.04] dark:backdrop-blur-md text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.08] transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+          className="glass-card self-start lg:self-center inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-xl text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0 disabled:opacity-50"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
           <span>Actualizar cuotas</span>
@@ -207,12 +215,12 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
       {/* Filters Toolbar */}
       <section className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] dark:backdrop-blur-md w-fit">
+          <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] border border-slate-900/[0.08] dark:border-white/[0.08] backdrop-blur-md w-fit">
             {SPORT_FILTERS.map((sf) => (
               <button
                 key={sf.id}
                 type="button"
-                onClick={() => setSportFilter(sf.id)}
+                onClick={() => onChangeSportFilter(sf.id)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   sportFilter === sf.id
                     ? 'bg-slate-900 text-white dark:bg-white/[0.14] dark:text-white'
@@ -226,7 +234,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
 
           <div
             aria-label="Filtrar por estado y jornada (solo hoy y mañana)"
-            className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] dark:backdrop-blur-md w-fit"
+            className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] border border-slate-900/[0.08] dark:border-white/[0.08] backdrop-blur-md w-fit"
           >
             {(
               [
@@ -287,7 +295,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Buscar equipo, liga o casa..."
               aria-label="Buscar partidos"
-              className="w-full sm:w-56 pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:backdrop-blur-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#ABF43F]"
+              className="w-full sm:w-56 pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-900/[0.08] dark:border-white/[0.08] bg-white/65 dark:bg-white/[0.04] backdrop-blur-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#ABF43F]"
             />
           </div>
 
@@ -297,7 +305,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
             className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
               onlyPositiveEv
                 ? 'bg-[#ABF43F] border-[#ABF43F] text-[#090909]'
-                : 'border-slate-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:backdrop-blur-md text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.08]'
+                : 'border-slate-900/[0.08] dark:border-white/[0.08] bg-white/65 dark:bg-white/[0.04] backdrop-blur-md text-slate-700 dark:text-slate-300 hover:bg-white/85 dark:hover:bg-white/[0.08]'
             }`}
           >
             Solo +EV
@@ -309,7 +317,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
             className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
               minConsensus >= 3
                 ? 'bg-slate-900 border-slate-900 text-white dark:bg-[#3FF4E5] dark:border-[#3FF4E5] dark:text-[#090909]'
-                : 'border-slate-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:backdrop-blur-md text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.08]'
+                : 'border-slate-900/[0.08] dark:border-white/[0.08] bg-white/65 dark:bg-white/[0.04] backdrop-blur-md text-slate-700 dark:text-slate-300 hover:bg-white/85 dark:hover:bg-white/[0.08]'
             }`}
           >
             <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -377,7 +385,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
             <button
               type="button"
               onClick={() => {
-                setSportFilter('all');
+                onChangeSportFilter('all');
                 setDayFilter('all');
                 setSearchQuery('');
                 setOnlyPositiveEv(false);
@@ -669,21 +677,70 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
 
                   {/* Card Footer Actions */}
                   <div
-                    className="pt-3 border-t border-slate-200/90 dark:border-white/[0.08] flex items-center justify-between gap-2.5"
+                    className="pt-3 border-t border-slate-200/90 dark:border-white/[0.08] flex items-center justify-between gap-2"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
                       type="button"
                       onClick={() => onInspectPick(activePick)}
-                      className="flex-1 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-white/[0.1] bg-transparent dark:bg-white/[0.03] text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.08] transition-colors whitespace-nowrap"
+                      className="flex-1 px-2.5 py-2 text-xs font-medium rounded-lg border border-slate-900/[0.1] dark:border-white/[0.1] bg-transparent dark:bg-white/[0.03] text-slate-700 dark:text-slate-200 hover:bg-slate-900/[0.06] dark:hover:bg-white/[0.08] transition-colors whitespace-nowrap"
                     >
                       Analizar
                     </button>
+                    {(() => {
+                      const legId = `${match.id}-totals-${activePick.side}-${activePick.marketLine.line}`;
+                      const inParlay = parlayLegIds.has(legId);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onToggleParlayLeg({
+                              id: legId,
+                              matchId: match.id,
+                              sport: match.sport,
+                              league: match.league,
+                              matchLabel: `${match.homeTeam} vs ${match.awayTeam}`,
+                              homeTeam: match.homeTeam,
+                              awayTeam: match.awayTeam,
+                              homeLogo: match.homeLogo,
+                              awayLogo: match.awayLogo,
+                              marketType: 'totals',
+                              selectionKey: activePick.side,
+                              marketLabel: marketSideText,
+                              line: activePick.marketLine.line,
+                              bookmaker: activePick.marketLine.bookmaker,
+                              odds: activePick.odds,
+                              modelProb: activePick.modelProb,
+                              pushProb: activePick.pushProb,
+                              ev: activePick.ev,
+                              modelType: activePick.modelType,
+                              homeLambda: match.homeLambda,
+                              awayLambda: match.awayLambda,
+                              homeElo: match.homeElo,
+                              awayElo: match.awayElo,
+                              bivariateCov: match.bivariateCov,
+                              rho: match.rho,
+                              alpha: match.alpha,
+                              mlFeatures: match.mlFeatures,
+                            })
+                          }
+                          title={inParlay ? 'Quitar del boleto combinado' : 'Añadir al boleto combinado'}
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                            inParlay
+                              ? 'border-[#3FF4E5]/70 bg-[#3FF4E5]/20 text-slate-950 dark:text-[#3FF4E5]'
+                              : 'border-slate-900/[0.1] dark:border-white/[0.1] bg-transparent dark:bg-white/[0.03] text-slate-700 dark:text-slate-200 hover:bg-slate-900/[0.06] dark:hover:bg-white/[0.08]'
+                          }`}
+                        >
+                          <Layers className="h-3.5 w-3.5" />
+                          <span>{inParlay ? 'En parlay' : '+ Parlay'}</span>
+                        </button>
+                      );
+                    })()}
                     {activePick.ev > 0 && (
                       <button
                         type="button"
                         onClick={() => handleQuickBetClick(activePick)}
-                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-[#ABF43F] hover:bg-[#bdf762] text-[#090909] transition-colors whitespace-nowrap"
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg bg-[#ABF43F] hover:bg-[#bdf762] text-[#090909] transition-colors whitespace-nowrap"
                       >
                         {isRecentlyPlaced ? (
                           <>

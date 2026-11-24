@@ -1,4 +1,4 @@
-import { Check, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Layers, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Bar,
@@ -11,58 +11,75 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { evaluateMarketLine } from '../lib/dixonColes.ts';
+import { getChartTheme } from '../lib/chartTheme.ts';
+import { computeSoccerDerivedMarkets, evaluateMarketLine } from '../lib/dixonColes.ts';
 import { formatTime24h } from '../lib/timezone.ts';
 import { MODEL_META, SPORT_META } from '../types/quant.ts';
 import type {
   BankrollConfig,
   BetSide,
+  DerivedSoccerOption,
   EvaluatedPick,
   FormResult,
+  LiveMatch,
   ModelType,
+  ParlayLeg,
 } from '../types/quant.ts';
 import { TeamCrest } from './TeamCrest.tsx';
 
 const FORM_BADGE_STYLES: Record<FormResult, { className: string; title: string }> = {
   G: {
     className:
-      'bg-[#ABF43F]/20 text-[#ABF43F] border border-[#ABF43F]/40',
+      'bg-[#ABF43F]/30 text-slate-950 border border-[#ABF43F]/75 dark:bg-[#ABF43F]/20 dark:text-[#ABF43F] dark:border-[#ABF43F]/40',
     title: 'Victoria (Ganado)',
   },
   P: {
     className:
-      'bg-[#FF3B4B]/20 text-[#FF3B4B] border border-[#FF3B4B]/40',
+      'bg-[#FF3B4B]/18 text-[#FF3B4B] border border-[#FF3B4B]/45 dark:bg-[#FF3B4B]/20 dark:text-[#FF3B4B] dark:border-[#FF3B4B]/40',
     title: 'Derrota (Perdido)',
   },
   E: {
     className:
-      'bg-[#3FF4E5]/20 text-[#3FF4E5] border border-[#3FF4E5]/40',
+      'bg-[#3FF4E5]/28 text-slate-950 border border-[#3FF4E5]/75 dark:bg-[#3FF4E5]/20 dark:text-[#3FF4E5] dark:border-[#3FF4E5]/40',
     title: 'Empate',
   },
 };
 
 interface PickInspectorProps {
   pick: EvaluatedPick | null;
+  theme: 'dark' | 'light';
   activeModel: ModelType;
   currentBankroll: number;
   bankrollConfig: BankrollConfig;
   currencySymbol: string;
   timeZone: string;
   tzLabel: string;
+  parlayLegIds: Set<string>;
   onClose: () => void;
   onPlaceBet: (pick: EvaluatedPick, customStake: number) => void;
+  onPlaceDerivedBet: (
+    match: LiveMatch,
+    option: DerivedSoccerOption,
+    modelType: ModelType,
+    customStake?: number
+  ) => void;
+  onToggleParlayLeg: (leg: ParlayLeg) => void;
 }
 
 export const PickInspector: React.FC<PickInspectorProps> = ({
   pick,
+  theme,
   activeModel,
   currentBankroll,
   bankrollConfig,
   currencySymbol,
   timeZone,
   tzLabel,
+  parlayLegIds,
   onClose,
   onPlaceBet,
+  onPlaceDerivedBet,
+  onToggleParlayLeg,
 }) => {
   const [selectedSide, setSelectedSide] = useState<BetSide>('over');
   const [selectedModel, setSelectedModel] = useState<ModelType>(activeModel);
@@ -76,6 +93,10 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
   const [stakeInput, setStakeInput] = useState<string>('');
   const [showStressTest, setShowStressTest] = useState<boolean>(false);
   const [justPlaced, setJustPlaced] = useState<boolean>(false);
+  const [soccerMarketTab, setSoccerMarketTab] = useState<'1x2' | 'btts' | 'asian-handicap'>('1x2');
+  const [placedDerivedId, setPlacedDerivedId] = useState<string | null>(null);
+
+  const chartTheme = useMemo(() => getChartTheme(theme), [theme]);
 
   useEffect(() => {
     if (!pick) return;
@@ -90,11 +111,12 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
     setAdjAlpha(pick.match.alpha);
     setStakeInput(pick.recommendedStake > 0 ? pick.recommendedStake.toFixed(2) : '25.00');
     setJustPlaced(false);
+    setPlacedDerivedId(null);
   }, [pick, activeModel]);
 
-  const evaluated = useMemo(() => {
+  const adjustedMatch = useMemo<LiveMatch | null>(() => {
     if (!pick) return null;
-    const adjustedMatch = {
+    return {
       ...pick.match,
       homeLambda: adjHomeLambda,
       awayLambda: adjAwayLambda,
@@ -104,6 +126,10 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
       rho: adjRho,
       alpha: adjAlpha,
     };
+  }, [pick, adjHomeLambda, adjAwayLambda, adjHomeElo, adjAwayElo, adjCov, adjRho, adjAlpha]);
+
+  const evaluated = useMemo(() => {
+    if (!pick || !adjustedMatch) return null;
     const [overP, underP] = evaluateMarketLine(
       adjustedMatch,
       pick.marketLine,
@@ -112,20 +138,12 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
       bankrollConfig
     );
     return selectedSide === 'over' ? overP : underP;
-  }, [
-    pick,
-    adjHomeLambda,
-    adjAwayLambda,
-    adjHomeElo,
-    adjAwayElo,
-    adjCov,
-    adjRho,
-    adjAlpha,
-    selectedModel,
-    selectedSide,
-    currentBankroll,
-    bankrollConfig,
-  ]);
+  }, [pick, adjustedMatch, selectedModel, selectedSide, currentBankroll, bankrollConfig]);
+
+  const soccerMarkets = useMemo(() => {
+    if (!adjustedMatch || adjustedMatch.sport !== 'soccer') return null;
+    return computeSoccerDerivedMarkets(adjustedMatch, selectedModel, currentBankroll, bankrollConfig);
+  }, [adjustedMatch, selectedModel, currentBankroll, bankrollConfig]);
 
   useEffect(() => {
     if (evaluated && evaluated.recommendedStake > 0) {
@@ -133,7 +151,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
     }
   }, [evaluated?.recommendedStake, selectedSide, selectedModel]);
 
-  if (!pick || !evaluated) return null;
+  if (!pick || !evaluated || !adjustedMatch) return null;
 
   const sportInfo = SPORT_META[pick.match.sport];
   const sideText =
@@ -190,16 +208,16 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div
-        className="fixed inset-0 bg-black/65 backdrop-blur-xs"
+        className="fixed inset-0 bg-slate-950/35 dark:bg-black/65 backdrop-blur-xs"
         onClick={onClose}
         aria-hidden="true"
       />
       <aside
         aria-label="Inspector cuantitativo de apuesta"
-        className="relative z-10 w-full max-w-[610px] h-full bg-white dark:bg-[#0c0c0e]/90 dark:backdrop-blur-2xl border-l border-slate-200 dark:border-white/[0.1] flex flex-col overflow-hidden"
+        className="relative z-10 w-full max-w-[630px] h-full glass-surface border-l border-slate-900/[0.08] dark:border-white/[0.1] flex flex-col overflow-hidden"
       >
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-slate-200 dark:border-white/[0.08] shrink-0">
+        <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-slate-900/[0.08] dark:border-white/[0.08] shrink-0">
           <div className="min-w-0">
             <div className="flex items-center flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>{sportInfo.name}</span>
@@ -259,7 +277,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        <div className="flex-1 overflow-y-auto px-7 py-6 space-y-6">
           {/* Side & Model Switchers */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex p-1 rounded-lg bg-slate-100 dark:bg-white/[0.05] dark:border dark:border-white/[0.08]">
@@ -302,16 +320,11 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
           </div>
 
           {/* Last 5 Matches Form Streak (Racha de los últimos 5 partidos) */}
-          <div className="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-slate-950/[0.92] dark:bg-white/[0.04] p-4 space-y-3">
+          <div className="glass-card rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-xs font-semibold text-slate-100">
+              <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                 Racha de los últimos 5 partidos
               </h3>
-              <div className="flex items-center gap-2.5 text-[10px] font-mono tabular-nums text-slate-400">
-                <span className="text-[#ABF43F]">G Victoria</span>
-                <span className="text-[#3FF4E5]">E Empate</span>
-                <span className="text-[#FF3B4B]">P Derrota</span>
-              </div>
             </div>
 
             <div className="space-y-2.5">
@@ -343,7 +356,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
               ).map((team) => (
                 <div
                   key={team.role}
-                  className="flex items-center justify-between gap-3 py-1.5 border-t border-white/[0.06] first:border-t-0 first:pt-0"
+                  className="flex items-center justify-between gap-3 py-1.5 border-t border-slate-200/80 dark:border-white/[0.06] first:border-t-0 first:pt-0"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <TeamCrest
@@ -355,8 +368,10 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
                       size="sm"
                     />
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-slate-100 truncate">{team.name}</p>
-                      <p className="text-[10px] text-slate-400">{team.role}</p>
+                      <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {team.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">{team.role}</p>
                     </div>
                   </div>
 
@@ -430,8 +445,161 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
             </div>
           </div>
 
+          {/* Soccer Derived Markets: 1X2, BTTS, Asian Handicap */}
+          {soccerMarkets && (
+            <div className="glass-card rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                    Mercados de Fútbol Derivados (Matriz Bivariada)
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Calculados en tiempo real con {MODEL_META[selectedModel].shortName}
+                  </p>
+                </div>
+
+                <div className="inline-flex p-0.5 rounded-lg bg-slate-900/[0.06] dark:bg-white/[0.05] border border-slate-900/[0.08] dark:border-white/[0.08]">
+                  {(
+                    [
+                      { id: '1x2', label: '1X2' },
+                      { id: 'btts', label: 'Ambos Marcan' },
+                      { id: 'asian-handicap', label: 'Hándicap Asiático' },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSoccerMarketTab(tab.id)}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                        soccerMarketTab === tab.id
+                          ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
+                          : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div
+                className={`grid gap-2.5 ${
+                  soccerMarketTab === '1x2' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2'
+                }`}
+              >
+                {(soccerMarketTab === '1x2'
+                  ? soccerMarkets.oneXTwo
+                  : soccerMarketTab === 'btts'
+                    ? soccerMarkets.btts
+                    : soccerMarkets.asianHandicap.options
+                ).map((opt) => {
+                  const inParlay = parlayLegIds.has(opt.optionId);
+                  const isPlaced = placedDerivedId === opt.optionId;
+                  return (
+                    <div
+                      key={opt.optionId}
+                      className="rounded-lg border border-slate-900/[0.08] dark:border-white/[0.08] bg-white/55 dark:bg-white/[0.03] p-3 flex flex-col justify-between gap-2.5"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            {opt.shortLabel}
+                          </span>
+                          <span className="font-mono tabular-nums text-xs font-bold text-slate-900 dark:text-slate-50">
+                            {opt.odds.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          <span>Mod {(opt.modelProb * 100).toFixed(1)}%</span>
+                          <span>Justa {opt.fairOdds.toFixed(2)}</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[11px] font-mono tabular-nums">
+                          <span className="text-slate-500 dark:text-slate-400">EV</span>
+                          <span
+                            className={`font-semibold ${
+                              opt.ev >= 0.02
+                                ? 'text-slate-900 dark:text-[#ABF43F]'
+                                : opt.ev > 0
+                                  ? 'text-slate-800 dark:text-[#3FF4E5]'
+                                  : 'text-[#FF3B4B]'
+                            }`}
+                          >
+                            {opt.ev >= 0 ? '+' : ''}
+                            {(opt.ev * 100).toFixed(2)}%
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-1 border-t border-slate-900/[0.06] dark:border-white/[0.06]">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onToggleParlayLeg({
+                              id: opt.optionId,
+                              matchId: adjustedMatch.id,
+                              sport: adjustedMatch.sport,
+                              league: adjustedMatch.league,
+                              matchLabel: `${adjustedMatch.homeTeam} vs ${adjustedMatch.awayTeam}`,
+                              homeTeam: adjustedMatch.homeTeam,
+                              awayTeam: adjustedMatch.awayTeam,
+                              homeLogo: adjustedMatch.homeLogo,
+                              awayLogo: adjustedMatch.awayLogo,
+                              marketType: opt.marketType,
+                              selectionKey: opt.selectionKey,
+                              marketLabel: opt.label,
+                              line: opt.line,
+                              bookmaker: opt.bookmaker,
+                              odds: opt.odds,
+                              modelProb: opt.modelProb,
+                              pushProb: opt.pushProb,
+                              ev: opt.ev,
+                              modelType: selectedModel,
+                              homeLambda: adjustedMatch.homeLambda,
+                              awayLambda: adjustedMatch.awayLambda,
+                              homeElo: adjustedMatch.homeElo,
+                              awayElo: adjustedMatch.awayElo,
+                              bivariateCov: adjustedMatch.bivariateCov,
+                              rho: adjustedMatch.rho,
+                              alpha: adjustedMatch.alpha,
+                              mlFeatures: adjustedMatch.mlFeatures,
+                            })
+                          }
+                          className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap ${
+                            inParlay
+                              ? 'border-[#3FF4E5]/70 bg-[#3FF4E5]/20 text-slate-950 dark:text-[#3FF4E5]'
+                              : 'border-slate-900/[0.1] dark:border-white/[0.1] text-slate-700 dark:text-slate-200 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.07]'
+                          }`}
+                        >
+                          <Layers className="h-3 w-3" />
+                          <span>{inParlay ? 'En parlay' : '+ Parlay'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onPlaceDerivedBet(adjustedMatch, opt, selectedModel);
+                            setPlacedDerivedId(opt.optionId);
+                            setTimeout(() => {
+                              setPlacedDerivedId((prev) => (prev === opt.optionId ? null : prev));
+                            }, 1800);
+                          }}
+                          className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                            isPlaced || opt.ev > 0
+                              ? 'bg-[#ABF43F] hover:bg-[#bdf762] text-[#090909]'
+                              : 'bg-slate-900 text-white dark:bg-white/15 dark:text-slate-100 hover:opacity-90'
+                          }`}
+                        >
+                          {isPlaced ? 'OK' : 'Apostar'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Probability Visual Bar */}
-          <div className="space-y-3">
+          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium text-slate-800 dark:text-slate-200">
                 Probabilidad Estimada vs Implícita del Mercado ({sideText})
@@ -504,11 +672,11 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
           </div>
 
           {/* Multi-Model Comparison Table */}
-          <div className="space-y-2.5">
+          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2.5">
             <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
               Comparativa entre Modelos Predictivos ({sideText})
             </h3>
-            <div className="overflow-x-auto border border-slate-200 dark:border-white/[0.08] rounded-xl dark:bg-white/[0.03]">
+            <div className="overflow-x-auto border border-slate-200 dark:border-white/[0.08] rounded-lg dark:bg-white/[0.02]">
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-white/[0.08]">
                   <tr>
@@ -569,7 +737,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
           </div>
 
           {/* Total Goals/Points Distribution Chart */}
-          <div className="space-y-2.5">
+          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                 Distribución Esperada de {isHighScoring ? 'Puntos Totales' : 'Goles Totales'}
@@ -579,43 +747,39 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
                 {sportInfo.unit}
               </span>
             </div>
-            <div className="h-44 w-full border border-slate-200 dark:border-white/[0.08] rounded-xl p-3 bg-slate-50/40 dark:bg-white/[0.03]">
+            <div className="h-44 w-full border border-slate-200 dark:border-white/[0.06] rounded-lg p-3 bg-white/60 dark:bg-white/[0.02]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={evaluated.totalDistribution}
                   margin={{ top: 8, right: 8, left: -22, bottom: 0 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} />
                   <XAxis
                     dataKey="label"
-                    tick={{ fontSize: 11, fill: '#94A3B8' }}
+                    tick={{ fontSize: 11, fill: chartTheme.axisTickFill }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <YAxis
                     tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
-                    tick={{ fontSize: 10, fill: '#94A3B8' }}
+                    tick={{ fontSize: 10, fill: chartTheme.axisTickFill }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <Tooltip
+                    cursor={{ fill: chartTheme.cursorFill }}
                     formatter={(value: unknown) => [
                       `${(Number(value) * 100).toFixed(2)}%`,
                       'Probabilidad',
                     ]}
                     labelFormatter={(lbl) => `${lbl} ${sportInfo.unit}`}
-                    contentStyle={{
-                      backgroundColor: 'rgba(12, 12, 14, 0.92)',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      borderRadius: '10px',
-                      color: '#F8FAFC',
-                      fontSize: '12px',
-                      backdropFilter: 'blur(12px)',
-                    }}
+                    contentStyle={chartTheme.tooltipContentStyle}
+                    labelStyle={chartTheme.tooltipLabelStyle}
+                    itemStyle={chartTheme.tooltipItemStyle}
                   />
                   <ReferenceLine
                     x={String(Math.floor(pick.marketLine.line))}
-                    stroke="#3FF4E5"
+                    stroke={chartTheme.referenceLineStroke}
                     strokeDasharray="3 3"
                   />
                   <Bar dataKey="modelProb" radius={[3, 3, 0, 0]}>
@@ -637,14 +801,14 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
           </div>
 
           {/* Exact Scoreline Probability Heatmap */}
-          <div className="space-y-2.5">
+          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2.5">
             <div className="flex items-center justify-between text-xs">
               <h3 className="font-semibold text-slate-900 dark:text-slate-100">
                 Matriz de Marcadores ({isHighScoring ? 'Bandas de Puntos' : 'Marcadores Exactos'})
               </h3>
               <span className="text-slate-500 dark:text-slate-400">Verde neón: gana {sideText}</span>
             </div>
-            <div className="overflow-x-auto border border-slate-200 dark:border-white/[0.08] rounded-xl p-3 bg-slate-50/40 dark:bg-white/[0.03]">
+            <div className="overflow-x-auto border border-slate-200 dark:border-white/[0.06] rounded-lg p-3 bg-white/60 dark:bg-white/[0.02]">
               <div
                 className="grid gap-1 text-center font-mono tabular-nums text-[11px]"
                 style={{
@@ -705,7 +869,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
           </div>
 
           {/* Interactive Parameter Stress Testing */}
-          <div className="border-t border-slate-200 dark:border-white/[0.08] pt-4">
+          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-4">
             <div className="flex items-center justify-between">
               <button
                 type="button"
@@ -852,7 +1016,7 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
         </div>
 
         {/* Sticky Execution Footer */}
-        <div className="px-6 py-4 border-t border-slate-200 dark:border-white/[0.08] bg-slate-50 dark:bg-white/[0.03] shrink-0">
+        <div className="px-6 py-4 border-t border-slate-900/[0.08] dark:border-white/[0.08] bg-white/60 dark:bg-white/[0.03] backdrop-blur-md shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -881,26 +1045,77 @@ export const PickInspector: React.FC<PickInspectorProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleConfirmBet}
-              className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors whitespace-nowrap shrink-0 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
-                justPlaced
-                  ? 'bg-[#ABF43F] text-[#090909]'
-                  : isPositiveEv
-                    ? 'bg-[#ABF43F] hover:bg-[#bdf762] text-[#090909]'
-                    : 'bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-slate-200 text-white dark:text-slate-950'
-              }`}
-            >
-              {justPlaced ? (
-                <>
-                  <Check className="h-4 w-4" />
-                  <span>Apuesta registrada</span>
-                </>
-              ) : (
-                <span>Registrar apuesta</span>
-              )}
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {(() => {
+                const totalsLegId = `${adjustedMatch.id}-totals-${selectedSide}-${pick.marketLine.line}`;
+                const inParlay = parlayLegIds.has(totalsLegId);
+                return (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleParlayLeg({
+                        id: totalsLegId,
+                        matchId: adjustedMatch.id,
+                        sport: adjustedMatch.sport,
+                        league: adjustedMatch.league,
+                        matchLabel: `${adjustedMatch.homeTeam} vs ${adjustedMatch.awayTeam}`,
+                        homeTeam: adjustedMatch.homeTeam,
+                        awayTeam: adjustedMatch.awayTeam,
+                        homeLogo: adjustedMatch.homeLogo,
+                        awayLogo: adjustedMatch.awayLogo,
+                        marketType: 'totals',
+                        selectionKey: selectedSide,
+                        marketLabel: sideText,
+                        line: pick.marketLine.line,
+                        bookmaker: pick.marketLine.bookmaker,
+                        odds: evaluated.odds,
+                        modelProb: evaluated.modelProb,
+                        pushProb: evaluated.pushProb,
+                        ev: evaluated.ev,
+                        modelType: selectedModel,
+                        homeLambda: adjustedMatch.homeLambda,
+                        awayLambda: adjustedMatch.awayLambda,
+                        homeElo: adjustedMatch.homeElo,
+                        awayElo: adjustedMatch.awayElo,
+                        bivariateCov: adjustedMatch.bivariateCov,
+                        rho: adjustedMatch.rho,
+                        alpha: adjustedMatch.alpha,
+                        mlFeatures: adjustedMatch.mlFeatures,
+                      })
+                    }
+                    className={`px-3.5 py-2.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                      inParlay
+                        ? 'border-[#3FF4E5]/70 bg-[#3FF4E5]/20 text-slate-950 dark:text-[#3FF4E5]'
+                        : 'border-slate-900/[0.12] dark:border-white/[0.12] text-slate-800 dark:text-slate-100 hover:bg-slate-900/[0.06] dark:hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    <span>{inParlay ? 'En parlay' : '+ Parlay'}</span>
+                  </button>
+                );
+              })()}
+
+              <button
+                type="button"
+                onClick={handleConfirmBet}
+                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors whitespace-nowrap shrink-0 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
+                  justPlaced
+                    ? 'bg-[#ABF43F] text-[#090909]'
+                    : isPositiveEv
+                      ? 'bg-[#ABF43F] hover:bg-[#bdf762] text-[#090909]'
+                      : 'bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-slate-200 text-white dark:text-slate-950'
+                }`}
+              >
+                {justPlaced ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>Apuesta registrada</span>
+                  </>
+                ) : (
+                  <span>Registrar apuesta</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </aside>

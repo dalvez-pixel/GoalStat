@@ -1,0 +1,533 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // PILLAR 0: GLOBAL SAFETY NET (Default-Deny Catch-All)
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // PHASE 3: REUSABLE HARDENED PRIMITIVES
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function hasUserWorkspace(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidSport(val) {
+      return val is string && val in ['soccer', 'nba', 'nhl', 'football'];
+    }
+
+    function isValidModelType(val) {
+      return val is string && val in [
+        'bivariate-poisson-xg-elo',
+        'dixon-coles',
+        'negative-binomial',
+        'ml-gbdt',
+        'ensemble'
+      ];
+    }
+
+    // =========================================================================
+    // VALIDATION BLUEPRINTS (Anti-Update-Gap Helpers)
+    // =========================================================================
+
+    function isValidBankrollConfig(cfg) {
+      return cfg is map
+        && cfg.keys().hasAll([
+          'initialBankroll',
+          'strategy',
+          'flatPercent',
+          'flatFixed',
+          'maxStakePercent',
+          'dailyStopLossPercent',
+          'minEvThreshold',
+          'currency'
+        ])
+        && cfg.keys().hasOnly([
+          'initialBankroll',
+          'strategy',
+          'flatPercent',
+          'flatFixed',
+          'maxStakePercent',
+          'dailyStopLossPercent',
+          'minEvThreshold',
+          'currency'
+        ])
+        && cfg.initialBankroll is number && cfg.initialBankroll >= 0 && cfg.initialBankroll <= 100000000
+        && cfg.strategy is string && cfg.strategy in [
+          'kelly-quarter',
+          'kelly-half',
+          'kelly-full',
+          'flat-percent',
+          'flat-fixed'
+        ]
+        && cfg.flatPercent is number && cfg.flatPercent >= 0.1 && cfg.flatPercent <= 50
+        && cfg.flatFixed is number && cfg.flatFixed >= 1 && cfg.flatFixed <= 1000000
+        && cfg.maxStakePercent is number && cfg.maxStakePercent >= 0.5 && cfg.maxStakePercent <= 50
+        && cfg.dailyStopLossPercent is number && cfg.dailyStopLossPercent >= 1 && cfg.dailyStopLossPercent <= 100
+        && cfg.minEvThreshold is number && cfg.minEvThreshold >= 0 && cfg.minEvThreshold <= 100
+        && cfg.currency is string && cfg.currency in ['EUR', 'USD'];
+    }
+
+    function isValidAlertSettings(settings) {
+      return settings is map
+        && settings.keys().hasAll([
+          'pushEnabled',
+          'soundEnabled',
+          'minEvPercent',
+          'minEdgePercent',
+          'sports'
+        ])
+        && settings.keys().hasOnly([
+          'pushEnabled',
+          'soundEnabled',
+          'minEvPercent',
+          'minEdgePercent',
+          'sports'
+        ])
+        && settings.pushEnabled is bool
+        && settings.soundEnabled is bool
+        && settings.minEvPercent is number && settings.minEvPercent >= 0 && settings.minEvPercent <= 100
+        && settings.minEdgePercent is number && settings.minEdgePercent >= 0 && settings.minEdgePercent <= 100
+        && settings.sports is map
+        && settings.sports.keys().hasAll(['soccer', 'nba', 'nhl', 'football'])
+        && settings.sports.keys().hasOnly(['soccer', 'nba', 'nhl', 'football'])
+        && settings.sports.soccer is bool
+        && settings.sports.nba is bool
+        && settings.sports.nhl is bool
+        && settings.sports.football is bool;
+    }
+
+    function isValidUserWorkspace(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'theme',
+          'timezonePref',
+          'activeModel',
+          'bankrollConfig',
+          'alertSettings',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'photoURL',
+          'theme',
+          'timezonePref',
+          'activeModel',
+          'bankrollConfig',
+          'alertSettings',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.email == request.auth.token.email
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && data.theme is string && data.theme in ['dark', 'light']
+        && data.timezonePref is string && data.timezonePref in ['gmt-6', 'local']
+        && isValidModelType(data.activeModel)
+        && isValidBankrollConfig(data.bankrollConfig)
+        && isValidAlertSettings(data.alertSettings)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBetDocument(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'date',
+          'monthKey',
+          'sport',
+          'league',
+          'matchLabel',
+          'side',
+          'line',
+          'bookmaker',
+          'odds',
+          'closingOdds',
+          'modelProb',
+          'edge',
+          'ev',
+          'stake',
+          'status',
+          'pnl',
+          'modelUsed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'date',
+          'monthKey',
+          'sport',
+          'league',
+          'matchId',
+          'matchLabel',
+          'side',
+          'line',
+          'marketType',
+          'selectionKey',
+          'marketLabel',
+          'finalScore',
+          'bookmaker',
+          'odds',
+          'closingOdds',
+          'modelProb',
+          'edge',
+          'ev',
+          'stake',
+          'status',
+          'pnl',
+          'modelUsed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.date is string && data.date.size() >= 10 && data.date.size() <= 40
+        && data.monthKey is string && data.monthKey.size() == 7 && data.monthKey.matches('^[0-9]{4}-[0-9]{2}$')
+        && isValidSport(data.sport)
+        && data.league is string && data.league.size() >= 1 && data.league.size() <= 100
+        && (!('matchId' in data) || (data.matchId is string && data.matchId.size() >= 1 && data.matchId.size() <= 128))
+        && data.matchLabel is string && data.matchLabel.size() >= 1 && data.matchLabel.size() <= 160
+        && data.side is string && data.side in ['over', 'under']
+        && data.line is number && data.line >= -100 && data.line <= 500
+        && (!('marketType' in data) || (data.marketType is string && data.marketType in ['totals', 'btts', '1x2', 'asian-handicap', 'parlay']))
+        && (!('selectionKey' in data) || (data.selectionKey is string && data.selectionKey in [
+          'over', 'under', 'btts_yes', 'btts_no', 'home', 'draw', 'away', 'ah_home', 'ah_away', 'parlay'
+        ]))
+        && (!('marketLabel' in data) || (data.marketLabel is string && data.marketLabel.size() >= 1 && data.marketLabel.size() <= 240))
+        && (!('finalScore' in data) || (data.finalScore is string && data.finalScore.size() >= 1 && data.finalScore.size() <= 40))
+        && data.bookmaker is string && data.bookmaker.size() >= 1 && data.bookmaker.size() <= 80
+        && data.odds is number && data.odds >= 1.01 && data.odds <= 1000
+        && data.closingOdds is number && data.closingOdds >= 1.01 && data.closingOdds <= 1000
+        && data.modelProb is number && data.modelProb >= 0 && data.modelProb <= 1
+        && data.edge is number && data.edge >= -1 && data.edge <= 1
+        && data.ev is number && data.ev >= -1 && data.ev <= 100
+        && data.stake is number && data.stake >= 0.01 && data.stake <= 10000000
+        && data.status is string && data.status in ['pending', 'won', 'lost', 'void']
+        && data.pnl is number && data.pnl >= -10000000 && data.pnl <= 100000000
+        && isValidModelType(data.modelUsed)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMlFeatures(f) {
+      return f is map
+        && f.keys().hasAll([
+          'paceIndex',
+          'volatilityIndex',
+          'shotQualityDiff',
+          'defensiveFragility',
+          'restAdvantage'
+        ])
+        && f.keys().hasOnly([
+          'paceIndex',
+          'volatilityIndex',
+          'shotQualityDiff',
+          'defensiveFragility',
+          'restAdvantage'
+        ])
+        && f.paceIndex is number && f.paceIndex >= 0.5 && f.paceIndex <= 2.0
+        && f.volatilityIndex is number && f.volatilityIndex >= 0 && f.volatilityIndex <= 2.0
+        && f.shotQualityDiff is number && f.shotQualityDiff >= -2.0 && f.shotQualityDiff <= 2.0
+        && f.defensiveFragility is number && f.defensiveFragility >= 0.5 && f.defensiveFragility <= 2.0
+        && f.restAdvantage is number && f.restAdvantage >= -10 && f.restAdvantage <= 10;
+    }
+
+    function isValidParlayLegDocument(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'legId',
+          'matchId',
+          'sport',
+          'league',
+          'matchLabel',
+          'homeTeam',
+          'awayTeam',
+          'marketType',
+          'selectionKey',
+          'marketLabel',
+          'line',
+          'bookmaker',
+          'odds',
+          'modelProb',
+          'pushProb',
+          'ev',
+          'modelType',
+          'homeLambda',
+          'awayLambda',
+          'homeElo',
+          'awayElo',
+          'bivariateCov',
+          'rho',
+          'alpha',
+          'mlFeatures',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'legId',
+          'matchId',
+          'sport',
+          'league',
+          'matchLabel',
+          'homeTeam',
+          'awayTeam',
+          'homeLogo',
+          'awayLogo',
+          'marketType',
+          'selectionKey',
+          'marketLabel',
+          'line',
+          'bookmaker',
+          'odds',
+          'modelProb',
+          'pushProb',
+          'ev',
+          'modelType',
+          'homeLambda',
+          'awayLambda',
+          'homeElo',
+          'awayElo',
+          'bivariateCov',
+          'rho',
+          'alpha',
+          'mlFeatures',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.legId is string && data.legId.size() >= 1 && data.legId.size() <= 180
+        && data.matchId is string && data.matchId.size() >= 1 && data.matchId.size() <= 128
+        && isValidSport(data.sport)
+        && data.league is string && data.league.size() >= 1 && data.league.size() <= 100
+        && data.matchLabel is string && data.matchLabel.size() >= 1 && data.matchLabel.size() <= 160
+        && data.homeTeam is string && data.homeTeam.size() >= 1 && data.homeTeam.size() <= 80
+        && data.awayTeam is string && data.awayTeam.size() >= 1 && data.awayTeam.size() <= 80
+        && (!('homeLogo' in data) || (data.homeLogo is string && data.homeLogo.size() <= 500))
+        && (!('awayLogo' in data) || (data.awayLogo is string && data.awayLogo.size() <= 500))
+        && data.marketType is string && data.marketType in ['totals', 'btts', '1x2', 'asian-handicap']
+        && data.selectionKey is string && data.selectionKey in [
+          'over', 'under', 'btts_yes', 'btts_no', 'home', 'draw', 'away', 'ah_home', 'ah_away'
+        ]
+        && data.marketLabel is string && data.marketLabel.size() >= 1 && data.marketLabel.size() <= 160
+        && data.line is number && data.line >= -100 && data.line <= 500
+        && data.bookmaker is string && data.bookmaker.size() >= 1 && data.bookmaker.size() <= 80
+        && data.odds is number && data.odds >= 1.01 && data.odds <= 1000
+        && data.modelProb is number && data.modelProb >= 0 && data.modelProb <= 1
+        && data.pushProb is number && data.pushProb >= 0 && data.pushProb <= 1
+        && data.ev is number && data.ev >= -1 && data.ev <= 100
+        && isValidModelType(data.modelType)
+        && data.homeLambda is number && data.homeLambda >= 0 && data.homeLambda <= 300
+        && data.awayLambda is number && data.awayLambda >= 0 && data.awayLambda <= 300
+        && data.homeElo is number && data.homeElo >= 500 && data.homeElo <= 3000
+        && data.awayElo is number && data.awayElo >= 500 && data.awayElo <= 3000
+        && data.bivariateCov is number && data.bivariateCov >= 0 && data.bivariateCov <= 50
+        && data.rho is number && data.rho >= -1 && data.rho <= 1
+        && data.alpha is number && data.alpha >= 0 && data.alpha <= 10
+        && isValidMlFeatures(data.mlFeatures)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // COLLECTION 1: /users/{userId} (PII Isolated, Owner-Only)
+    // =========================================================================
+    match /users/{userId} {
+      // Strictly owner-only get; allows owner existence check on initial sign-in while denying all non-owners
+      allow get: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && (resource == null || existing().uid == request.auth.uid);
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserWorkspace(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserWorkspace(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Update Google Profile metadata
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']) ||
+          // Action: Update Bankroll Configuration
+          incoming().diff(existing()).affectedKeys().hasOnly(['bankrollConfig', 'updatedAt']) ||
+          // Action: Update Alert Settings
+          incoming().diff(existing()).affectedKeys().hasOnly(['alertSettings', 'updatedAt']) ||
+          // Action: Update Workspace Preferences
+          incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'timezonePref', 'activeModel', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      // =======================================================================
+      // COLLECTION 2: /users/{userId}/bets/{betId} (Owner Ledger + Terminal Lock)
+      // =======================================================================
+      match /bets/{betId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(betId)
+          && isOwner(userId)
+          && (resource == null || existing().ownerId == request.auth.uid)
+          && hasUserWorkspace(userId);
+
+        // Cost-optimized list rule: zero get()/exists(), enforces resource.data.ownerId directly
+        allow list: if isSignedIn()
+          && isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(betId)
+          && isOwner(userId)
+          && isValidBetDocument(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && hasUserWorkspace(userId);
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(betId)
+          && isOwner(userId)
+          && isValidBetDocument(incoming(), userId)
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          // Terminal State Locking: only pending bets can transition to won/lost/void
+          && existing().status == 'pending'
+          && incoming().status in ['won', 'lost', 'void']
+          && (
+            // Action: Settle pending bet (manual or automatic ESPN settlement)
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'pnl',
+              'closingOdds',
+              'finalScore',
+              'updatedAt'
+            ])
+          )
+          && hasUserWorkspace(userId);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(betId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid
+          && hasUserWorkspace(userId);
+      }
+
+      // =======================================================================
+      // COLLECTION 3: /users/{userId}/parlayLegs/{legId} (Owner Parlay Slip)
+      // =======================================================================
+      match /parlayLegs/{legId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(legId)
+          && isOwner(userId)
+          && (resource == null || existing().ownerId == request.auth.uid)
+          && hasUserWorkspace(userId);
+
+        // Cost-optimized list rule: zero get()/exists(), enforces resource.data.ownerId directly
+        allow list: if isSignedIn()
+          && isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(legId)
+          && isOwner(userId)
+          && isValidParlayLegDocument(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && hasUserWorkspace(userId);
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(legId)
+          && isOwner(userId)
+          && isValidParlayLegDocument(incoming(), userId)
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Refresh live odds and model probabilities on a parlay leg
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'odds',
+              'modelProb',
+              'pushProb',
+              'ev',
+              'updatedAt'
+            ])
+          )
+          && hasUserWorkspace(userId);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(legId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid
+          && hasUserWorkspace(userId);
+      }
+    }
+  }
+}
