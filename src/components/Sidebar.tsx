@@ -4,7 +4,6 @@ import {
   Bell,
   ChevronDown,
   ClipboardCheck,
-  Clock,
   Cloud,
   Download,
   FileText,
@@ -19,7 +18,6 @@ import {
   X,
 } from 'lucide-react';
 import React, { useState } from 'react';
-import type { TimezonePreference } from '../lib/timezone.ts';
 import type { SportId } from '../types/quant.ts';
 
 export type WorkspaceTab =
@@ -50,9 +48,6 @@ interface SidebarProps {
   onSelectTab: (tab: WorkspaceTab) => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
-  timezonePref: TimezonePreference;
-  onChangeTimezonePref: (pref: TimezonePreference) => void;
-  localTzLabel: string;
   unreadAlerts: number;
   liveMatchCount: number;
   currentBankroll: number;
@@ -95,9 +90,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   theme,
   onToggleTheme,
-  timezonePref,
-  onChangeTimezonePref,
-  localTzLabel,
   unreadAlerts,
   liveMatchCount,
   currentBankroll,
@@ -381,46 +373,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 maximumFractionDigits: 2,
               })}
             </p>
-          </div>
-
-          {/* 24h Timezone Selector */}
-          <div className="glass-card rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
-            <div className="flex items-center justify-between px-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-              <span className="inline-flex items-center gap-1.5">
-                <Clock className="h-3 w-3 shrink-0" />
-                <span>Horario 24h</span>
-              </span>
-            </div>
-            <div
-              role="group"
-              aria-label="Zona horaria (24h)"
-              className="grid grid-cols-1 gap-1 p-1 rounded-lg border border-slate-200 dark:border-white/[0.1] bg-slate-100/80 dark:bg-white/[0.04]"
-            >
-              <button
-                type="button"
-                onClick={() => onChangeTimezonePref('gmt-6')}
-                title="Horario estándar GMT-6 (24h)"
-                className={`px-2 py-1.5 text-[11px] font-mono font-medium rounded-md transition-colors whitespace-nowrap ${
-                  timezonePref === 'gmt-6'
-                    ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                GMT-6
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeTimezonePref('local')}
-                title={`Usar ubicación del usuario (${localTzLabel}, 24h)`}
-                className={`px-2 py-1.5 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap truncate ${
-                  timezonePref === 'local'
-                    ? 'bg-slate-900 text-white dark:bg-[#3FF4E5] dark:text-[#090909]'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                Local ({localTzLabel})
-              </button>
-            </div>
           </div>
 
           {/* Reporte PDF CTA */}

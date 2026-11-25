@@ -35,7 +35,6 @@ import {
 import { DEFAULT_BANKROLL_CONFIG, INITIAL_BET_HISTORY } from './lib/seedHistory.ts';
 import {
   formatTime24h,
-  getBrowserTimeZone,
   getShortOffsetLabel,
   resolveIanaTimeZone,
 } from './lib/timezone.ts';
@@ -61,7 +60,6 @@ const STORAGE_KEYS = {
   bets: 'lq_bets_v3',
   bankroll: 'lq_bankroll_v1',
   alertSettings: 'lq_alert_settings_v2',
-  timezonePref: 'lq_tz_pref_v1',
   parlayLegs: 'lq_parlay_legs_v1',
 };
 
@@ -166,26 +164,9 @@ export default function App() {
   const bankrollSyncTimerRef = useRef<number | null>(null);
   const alertSyncTimerRef = useRef<number | null>(null);
 
-  // Timezone Preference: GMT-6 default, toggleable to user's detected location timezone (24h format)
-  const [timezonePref, setTimezonePref] = useState<TimezonePreference>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.timezonePref);
-      return saved === 'local' ? 'local' : 'gmt-6';
-    } catch {
-      return 'gmt-6';
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.timezonePref, timezonePref);
-    } catch {
-      // Ignore storage quota errors
-    }
-  }, [timezonePref]);
-
-  const activeTimeZone = useMemo(() => resolveIanaTimeZone(timezonePref), [timezonePref]);
-  const localTzLabel = useMemo(() => getShortOffsetLabel(getBrowserTimeZone()), []);
+  // Always display match schedules using the user's detected local timezone (24h format)
+  const timezonePref: TimezonePreference = 'local';
+  const activeTimeZone = useMemo(() => resolveIanaTimeZone('local'), []);
   const activeTzLabel = useMemo(() => getShortOffsetLabel(activeTimeZone), [activeTimeZone]);
 
   // Dual Theme (Dark default for nocturnal analysis, persisted)
@@ -380,9 +361,8 @@ export default function App() {
         });
         if (cancelled) return;
 
-        // Hydrate workspace settings from cloud
+        // Hydrate workspace settings from cloud (timezone always follows user's local device)
         setTheme(workspace.theme);
-        setTimezonePref(workspace.timezonePref);
         setActiveModel(workspace.activeModel);
         setBankrollConfig(workspace.bankrollConfig);
         setAlertSettings(workspace.alertSettings);
@@ -399,7 +379,6 @@ export default function App() {
           (nextWorkspace) => {
             if (cancelled) return;
             setTheme(nextWorkspace.theme);
-            setTimezonePref(nextWorkspace.timezonePref);
             setActiveModel(nextWorkspace.activeModel);
             setBankrollConfig(nextWorkspace.bankrollConfig);
             setAlertSettings(nextWorkspace.alertSettings);
@@ -506,22 +485,14 @@ export default function App() {
       syncPrefsIfSignedIn(next, timezonePref, activeModel);
       return next;
     });
-  }, [syncPrefsIfSignedIn, timezonePref, activeModel]);
-
-  const handleChangeTimezonePref = useCallback(
-    (pref: TimezonePreference) => {
-      setTimezonePref(pref);
-      syncPrefsIfSignedIn(theme, pref, activeModel);
-    },
-    [syncPrefsIfSignedIn, theme, activeModel]
-  );
+  }, [syncPrefsIfSignedIn, activeModel]);
 
   const handleChangeActiveModel = useCallback(
     (model: ModelType) => {
       setActiveModel(model);
       syncPrefsIfSignedIn(theme, timezonePref, model);
     },
-    [syncPrefsIfSignedIn, theme, timezonePref]
+    [syncPrefsIfSignedIn, theme]
   );
 
   const handleUpdateBankrollConfig = useCallback(
@@ -1126,9 +1097,6 @@ export default function App() {
         onSelectTab={setActiveTab}
         theme={theme}
         onToggleTheme={handleToggleTheme}
-        timezonePref={timezonePref}
-        onChangeTimezonePref={handleChangeTimezonePref}
-        localTzLabel={localTzLabel}
         unreadAlerts={unreadAlerts}
         liveMatchCount={liveMatchCount}
         currentBankroll={currentBankroll}
