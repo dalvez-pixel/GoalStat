@@ -265,6 +265,45 @@ const DEFAULT_ML_FEATURES: MatchMlFeatures = {
   restAdvantage: 0,
 };
 
+export function getEnsembleWeights(sport: SportId): {
+  biv: number;
+  dc: number;
+  nb: number;
+  ml: number;
+} {
+  switch (sport) {
+    case 'soccer':
+      return { biv: 0.36, dc: 0.30, nb: 0.10, ml: 0.24 };
+    case 'nba':
+      return { biv: 0.30, dc: 0.15, nb: 0.10, ml: 0.45 };
+    case 'nhl':
+      return { biv: 0.40, dc: 0.08, nb: 0.22, ml: 0.30 };
+    case 'football':
+      return { biv: 0.28, dc: 0.10, nb: 0.14, ml: 0.48 };
+  }
+}
+
+/**
+ * Post-model temperature calibration (Platt scaling in logit space) to reduce tail overconfidence
+ * and improve empirical Brier Score / Log-Loss across all sports.
+ */
+function calibrateBinaryProbs(
+  overProb: number,
+  underProb: number,
+  sport: SportId
+): { overProb: number; underProb: number } {
+  const nonPush = overProb + underProb;
+  if (nonPush <= 0.01) return { overProb, underProb };
+  const p = Math.min(0.97, Math.max(0.03, overProb / nonPush));
+  const logit = Math.log(p / (1 - p));
+  const temp = sport === 'nba' ? 1.12 : sport === 'football' ? 1.1 : 1.07;
+  const calP = 1 / (1 + Math.exp(-logit / temp));
+  return {
+    overProb: calP * nonPush,
+    underProb: (1 - calP) * nonPush,
+  };
+}
+
 function computeSingleModelDistribution(
   homeLambda: number,
   awayLambda: number,
@@ -276,7 +315,8 @@ function computeSingleModelDistribution(
   awayElo: number,
   mlFeatures: MatchMlFeatures,
   modelType: Exclude<ModelType, 'ensemble'>,
-  sport: SportId
+  sport: SportId,
+  league?: string
 ): TotalsDistributionResult {
   const eloCal = calibrateRatesWithElo(homeLambda, awayLambda, homeElo, awayElo, sport);
   const mlParams =
@@ -298,18 +338,20 @@ function computeSingleModelDistribution(
         ? mlParams!.adjAwayLambda
         : awayLambda;
 
-  // High-scoring sports: NBA (~225 pts) & NFL/NCAAF (~46 pts)
+  // High-scoring sports: NBA (~224 pts) & NFL (~46 pts) / NCAAF (~54 pts)
   if (sport === 'nba' || sport === 'football') {
     const totalMean = Math.max(12, hMean + aMean);
-    // Base standard deviation calibrated to empirical NBA / NFL-NCAAF totals volatility
-    const baseSd = sport === 'nba' ? 18.2 : 13.4;
+    const isCollegeFootball =
+      sport === 'football' && typeof league === 'string' && /ncaa|college/i.test(league);
+    // Empirical total-score standard deviations separated cleanly for NBA, NFL, and NCAAF
+    const baseSd = sport === 'nba' ? 16.8 : isCollegeFootball ? 15.6 : 13.2;
     const covBoost =
-      modelType === 'bivariate-poisson-xg-elo' ? Math.sqrt(Math.max(0, bivariateCov)) * 0.9 : 0;
+      modelType === 'bivariate-poisson-xg-elo' ? Math.sqrt(Math.max(0, bivariateCov)) * 0.7 : 0;
     const dispBoost =
       modelType === 'negative-binomial'
-        ? Math.sqrt(1 + alpha * (sport === 'nba' ? 5.5 : 3.2))
+        ? Math.sqrt(1 + Math.min(alpha, 0.14) * (sport === 'nba' ? 2.4 : 1.9))
         : modelType === 'ml-gbdt'
-          ? 1 + mlParams!.tailAlpha * 0.35
+          ? 1 + mlParams!.tailAlpha * 0.25
           : 1;
     const sd = baseSd * dispBoost + covBoost;
 
@@ -336,6 +378,10 @@ function computeSingleModelDistribution(
       overProb = adjRatio * nonPush;
       underProb = (1 - adjRatio) * nonPush;
     }
+
+    const calibrated = calibrateBinaryProbs(overProb, underProb, sport);
+    overProb = calibrated.overProb;
+    underProb = calibrated.underProb;
 
     // Build focused bucketed distribution chart around the line
     const binStep = sport === 'nba' ? 4 : 3;
@@ -395,11 +441,13 @@ function computeSingleModelDistribution(
   const displayMax = sport === 'soccer' ? 5 : 6;
   const effectiveAlpha =
     modelType === 'negative-binomial'
-      ? Math.max(0.01, alpha)
+      ? Math.max(0.01, Math.min(alpha, 0.14))
       : modelType === 'ml-gbdt'
-        ? mlParams!.tailAlpha
+        ? Math.min(mlParams!.tailAlpha, 0.18)
         : 0;
-  const effectiveRho = modelType === 'dixon-coles' ? rho : 0;
+  // Dixon-Coles low-score tau is calibrated for soccer; dampen strongly in NHL where 0-0/1-0 are rare
+  const effectiveRho =
+    modelType === 'dixon-coles' ? (sport === 'nhl' ? rho * 0.35 : rho) : 0;
   const useBivariate = modelType === 'bivariate-poisson-xg-elo';
 
   const rawGrid: number[][] = [];
@@ -465,6 +513,10 @@ function computeSingleModelDistribution(
     underProb = (1 - adjustedRatio) * nonPush;
   }
 
+  const calibratedDiscrete = calibrateBinaryProbs(overProb, underProb, sport);
+  overProb = calibratedDiscrete.overProb;
+  underProb = calibratedDiscrete.underProb;
+
   const maxChartGoal = sport === 'soccer' ? 8 : 11;
   const totalDistribution: TotalGoalBin[] = [];
   for (let g = 0; g <= maxChartGoal; g++) {
@@ -495,8 +547,8 @@ function computeSingleModelDistribution(
 }
 
 /**
- * Computes totals distribution for any model including Ensemble
- * (35% Bivariate Poisson xG+Elo · 20% Dixon-Coles · 20% Neg. Binomial · 25% ML GBDT).
+ * Computes totals distribution for any model including Sport-Adaptive Ensemble
+ * (tailored weights per sport to maximize Brier calibration & out-of-sample hit rate).
  */
 export function computeTotalsDistribution(
   homeLambda: number,
@@ -509,7 +561,8 @@ export function computeTotalsDistribution(
   mlFeatures: MatchMlFeatures = DEFAULT_ML_FEATURES,
   bivariateCov = 0.14,
   homeElo = 1750,
-  awayElo = 1720
+  awayElo = 1720,
+  league?: string
 ): TotalsDistributionResult {
   if (modelType !== 'ensemble') {
     return computeSingleModelDistribution(
@@ -523,7 +576,8 @@ export function computeTotalsDistribution(
       awayElo,
       mlFeatures,
       modelType,
-      sport
+      sport,
+      league
     );
   }
 
@@ -538,7 +592,8 @@ export function computeTotalsDistribution(
     awayElo,
     mlFeatures,
     'bivariate-poisson-xg-elo',
-    sport
+    sport,
+    league
   );
   const dc = computeSingleModelDistribution(
     homeLambda,
@@ -551,7 +606,8 @@ export function computeTotalsDistribution(
     awayElo,
     mlFeatures,
     'dixon-coles',
-    sport
+    sport,
+    league
   );
   const nb = computeSingleModelDistribution(
     homeLambda,
@@ -564,7 +620,8 @@ export function computeTotalsDistribution(
     awayElo,
     mlFeatures,
     'negative-binomial',
-    sport
+    sport,
+    league
   );
   const ml = computeSingleModelDistribution(
     homeLambda,
@@ -577,13 +634,15 @@ export function computeTotalsDistribution(
     awayElo,
     mlFeatures,
     'ml-gbdt',
-    sport
+    sport,
+    league
   );
 
-  const wBiv = 0.35;
-  const wDc = 0.2;
-  const wNb = 0.2;
-  const wMl = 0.25;
+  const weights = getEnsembleWeights(sport);
+  const wBiv = weights.biv;
+  const wDc = weights.dc;
+  const wNb = weights.nb;
+  const wMl = weights.ml;
 
   const overProb = biv.overProb * wBiv + dc.overProb * wDc + nb.overProb * wNb + ml.overProb * wMl;
   const underProb =
@@ -697,7 +756,8 @@ export function evaluateMarketLine(
         match.awayElo,
         match.mlFeatures,
         m,
-        match.sport
+        match.sport,
+        match.league
       )
     );
   }
@@ -715,7 +775,8 @@ export function evaluateMarketLine(
           match.mlFeatures,
           match.bivariateCov,
           match.homeElo,
-          match.awayElo
+          match.awayElo,
+          match.league
         )
       : baseDists.get(modelType)!;
 
@@ -943,11 +1004,16 @@ export function computeFullDiscreteGrid(
   const gNb = buildSingle('negative-binomial');
   const gMl = buildSingle('ml-gbdt');
 
+  const weights = getEnsembleWeights(sport);
   const out: number[][] = [];
   for (let h = 0; h <= maxGoals; h++) {
     out[h] = [];
     for (let a = 0; a <= maxGoals; a++) {
-      out[h][a] = gBiv[h][a] * 0.35 + gDc[h][a] * 0.2 + gNb[h][a] * 0.2 + gMl[h][a] * 0.25;
+      out[h][a] =
+        gBiv[h][a] * weights.biv +
+        gDc[h][a] * weights.dc +
+        gNb[h][a] * weights.nb +
+        gMl[h][a] * weights.ml;
     }
   }
   return out;

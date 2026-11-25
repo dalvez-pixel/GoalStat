@@ -66,7 +66,7 @@ export const MODEL_META: Record<ModelType, ModelMeta> = {
     name: 'Consenso Ensemble',
     shortName: 'Ensemble',
     description:
-      'Meta-modelo ponderado (35% Bivariado xG+Elo · 20% Dixon-Coles · 20% Neg. Binomial · 25% ML GBDT).',
+      'Meta-modelo adaptativo por deporte con calibración Platt (prioriza Bivariado+Dixon-Coles en Fútbol, GBDT en NBA/NFL-NCAAF y Bivariado+NB en NHL).',
     accentColor: '#ABF43F',
   },
 };

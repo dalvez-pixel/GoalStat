@@ -364,6 +364,211 @@ function deriveLastFiveForm(
   return out;
 }
 
+interface RealTeamSignals {
+  winPct?: number; // 0..1 overall
+  splitWinPct?: number; // homeWinPct for home team, roadWinPct for away team
+  gamesPlayed?: number;
+  formWinPct?: number; // 0..1 from recent 5 games
+  avgPoints?: number; // NBA real PPG
+  fgaPerGame?: number; // NBA pace proxy
+  fgPct?: number; // NBA shooting efficiency (0..100)
+  threePtPct?: number; // NBA 3P% (0..100)
+  goalsPerGame?: number; // NHL real season GPG
+  savePct?: number; // NHL real team save % (e.g. 0.910)
+  plusMinusPerGame?: number; // NHL net goal diff per game
+}
+
+interface RealEspnOdds {
+  overUnder?: number;
+  overOdds?: number; // decimal odds
+  underOdds?: number; // decimal odds
+  spread?: number; // home spread (negative means home favored)
+  bookmaker?: string;
+}
+
+interface EspnCompetitorRaw {
+  homeAway?: string;
+  score?: string;
+  form?: string;
+  records?: Array<{ name?: string; summary?: string; type?: string }>;
+  statistics?: Array<{ name?: string; displayValue?: string }>;
+  team?: {
+    displayName?: string;
+    abbreviation?: string;
+    logo?: string;
+    color?: string;
+    alternateColor?: string;
+  };
+}
+
+interface EspnOddsRaw {
+  overUnder?: number;
+  spread?: number;
+  provider?: { name?: string; displayName?: string };
+  total?: {
+    over?: { close?: { odds?: string }; open?: { odds?: string } };
+    under?: { close?: { odds?: string }; open?: { odds?: string } };
+  };
+}
+
+const LEAGUE_SOCCER_TOTALS: Record<string, number> = {
+  bundesliga: 3.16,
+  eredivisie: 3.12,
+  'uefa champions league': 3.04,
+  'premier league': 2.94,
+  mls: 2.94,
+  'uefa europa league': 2.9,
+  'uefa conference league': 2.86,
+  'liga mx': 2.78,
+  'ligue 1': 2.74,
+  'primeira liga': 2.72,
+  championship: 2.68,
+  'serie a': 2.66,
+  laliga: 2.64,
+  'la liga': 2.64,
+  'copa libertadores': 2.52,
+  'copa sudamericana': 2.48,
+  'brasileirão serie a': 2.48,
+  'liga profesional argentina': 2.28,
+  'liga betplay': 2.38,
+};
+
+function americanToDecimalOdds(raw?: string | number): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const s = String(raw).trim().toUpperCase();
+  if (!s) return undefined;
+  if (s === 'EVEN' || s === 'EV') return 2.0;
+  const n = Number.parseFloat(s);
+  if (!Number.isFinite(n) || n === 0) return undefined;
+  // Already decimal odds
+  if (n > 1.01 && n < 50 && !s.startsWith('+') && !s.startsWith('-')) {
+    return round2(n);
+  }
+  if (n >= 100) return round2(1 + n / 100);
+  if (n <= -100) return round2(1 + 100 / Math.abs(n));
+  return undefined;
+}
+
+function parseRecordSummary(summary?: string, sport?: SportId): { winPct: number; games: number } | null {
+  if (!summary) return null;
+  const parts = summary
+    .trim()
+    .split('-')
+    .map((x) => Number.parseInt(x, 10))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+  if (parts.length < 2) return null;
+  const w = parts[0];
+  const p2 = parts[1];
+  const p3 = parts.length >= 3 ? parts[2] : 0;
+  const games = w + p2 + p3;
+  if (games <= 0) return null;
+  if (sport === 'soccer' && parts.length >= 3) {
+    // ESPN soccer summary is W-D-L
+    return { winPct: (w + 0.5 * p2) / games, games };
+  }
+  if (sport === 'nhl' && parts.length >= 3) {
+    // ESPN NHL summary is W-L-OTL
+    return { winPct: (w + 0.5 * p3) / games, games };
+  }
+  // Standard W-L(-T)
+  return { winPct: (w + 0.5 * p3) / games, games };
+}
+
+function extractRealTeamSignals(comp: EspnCompetitorRaw | undefined, sport: SportId): RealTeamSignals | undefined {
+  if (!comp) return undefined;
+  const out: RealTeamSignals = {};
+  const isHome = comp.homeAway === 'home';
+
+  const records = comp.records ?? [];
+  const totalRec = records.find((r) => r.type === 'total' || r.type === 'ytd' || /overall|total|ytd/i.test(r.name ?? '')) ?? records[0];
+  const splitRec = records.find((r) =>
+    isHome
+      ? r.type === 'home' || /home/i.test(r.name ?? '')
+      : r.type === 'road' || /road|away/i.test(r.name ?? '')
+  );
+
+  const parsedTotal = parseRecordSummary(totalRec?.summary, sport);
+  if (parsedTotal) {
+    out.winPct = parsedTotal.winPct;
+    out.gamesPlayed = parsedTotal.games;
+  }
+  const parsedSplit = parseRecordSummary(splitRec?.summary, sport);
+  if (parsedSplit && parsedSplit.games >= 2) {
+    out.splitWinPct = parsedSplit.winPct;
+  }
+
+  if (comp.form && comp.form.trim().length > 0) {
+    const chars = comp.form.trim().toUpperCase().replace(/[^WDLGEP]/g, '').slice(-5);
+    if (chars.length > 0) {
+      let pts = 0;
+      for (const ch of chars) {
+        if (ch === 'W' || ch === 'G') pts += 1;
+        else if (ch === 'D' || ch === 'E') pts += 0.5;
+      }
+      out.formWinPct = pts / chars.length;
+    }
+  }
+
+  const statMap = new Map<string, number>();
+  for (const st of comp.statistics ?? []) {
+    if (!st.name || !st.displayValue) continue;
+    const val = Number.parseFloat(st.displayValue);
+    if (Number.isFinite(val)) statMap.set(st.name, val);
+  }
+
+  if (sport === 'nba') {
+    const avgPts = statMap.get('avgPoints');
+    if (avgPts && avgPts > 80 && avgPts < 150) out.avgPoints = avgPts;
+    const fga = statMap.get('fieldGoalsAttempted');
+    if (fga && out.gamesPlayed && out.gamesPlayed >= 3) {
+      const fgaPg = fga / out.gamesPlayed;
+      if (fgaPg > 65 && fgaPg < 115) out.fgaPerGame = fgaPg;
+    }
+    const fgPct = statMap.get('fieldGoalPct');
+    if (fgPct && fgPct > 30 && fgPct < 65) out.fgPct = fgPct;
+    const threePct = statMap.get('threePointFieldGoalPct') ?? statMap.get('threePointPct');
+    if (threePct && threePct > 20 && threePct < 55) out.threePtPct = threePct;
+  } else if (sport === 'nhl') {
+    const goals = statMap.get('goals');
+    // Season cumulative goals are > 15 when gamesPlayed >= 5 (avoid single-game boxscore leakage on finished matches)
+    if (goals && out.gamesPlayed && out.gamesPlayed >= 5 && goals >= out.gamesPlayed * 1.3) {
+      const gpg = goals / out.gamesPlayed;
+      if (gpg >= 1.6 && gpg <= 5.2) out.goalsPerGame = gpg;
+    }
+    const savePct = statMap.get('savePct');
+    const saves = statMap.get('saves');
+    // Only use season-level savePct (when saves > 100), never single-game goalie boxscore on finished matches
+    if (savePct && savePct > 0.8 && savePct < 0.98 && (!saves || saves > 100)) {
+      out.savePct = savePct;
+    }
+    const pm = statMap.get('plusMinus');
+    if (pm !== undefined && out.gamesPlayed && out.gamesPlayed >= 5 && saves && saves > 100) {
+      out.plusMinusPerGame = clamp(pm / out.gamesPlayed, -2, 2);
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function extractRealEspnOdds(oddsList?: EspnOddsRaw[]): RealEspnOdds | undefined {
+  const o = oddsList?.[0];
+  if (!o) return undefined;
+  const overOdds =
+    americanToDecimalOdds(o.total?.over?.close?.odds) ??
+    americanToDecimalOdds(o.total?.over?.open?.odds);
+  const underOdds =
+    americanToDecimalOdds(o.total?.under?.close?.odds) ??
+    americanToDecimalOdds(o.total?.under?.open?.odds);
+  const overUnder = typeof o.overUnder === 'number' && o.overUnder > 0 ? o.overUnder : undefined;
+  const spread = typeof o.spread === 'number' && Number.isFinite(o.spread) ? o.spread : undefined;
+  const bookmaker = o.provider?.displayName ?? o.provider?.name;
+
+  if (overUnder === undefined && overOdds === undefined && underOdds === undefined && spread === undefined) {
+    return undefined;
+  }
+  return { overUnder, overOdds, underOdds, spread, bookmaker };
+}
+
 function buildSyntheticMarketLine(
   homeLambda: number,
   awayLambda: number,
@@ -375,32 +580,51 @@ function buildSyntheticMarketLine(
   mlFeatures: MatchMlFeatures,
   sport: SportId,
   line: number,
-  seedKey: string
+  seedKey: string,
+  realOdds?: RealEspnOdds,
+  league?: string
 ): MarketLine {
-  // Market consensus priced slightly slower than sharp Bivariate Poisson + xG + Elo model
+  // Use genuine sportsbook Over/Under decimal odds whenever ESPN provides them for this line
+  if (
+    realOdds &&
+    realOdds.overOdds &&
+    realOdds.underOdds &&
+    (realOdds.overUnder === undefined || Math.abs(realOdds.overUnder - line) < 0.01)
+  ) {
+    return {
+      line,
+      overOdds: clamp(round2(realOdds.overOdds), 1.15, 6.0),
+      underOdds: clamp(round2(realOdds.underOdds), 1.15, 6.0),
+      bookmaker: realOdds.bookmaker || 'DraftKings',
+    };
+  }
+
+  // Sharp market consensus baseline anchored to calibrated Ensemble (with tighter realistic pricing noise)
   const marketDist = computeTotalsDistribution(
     homeLambda,
     awayLambda,
     line,
-    rho * 0.4,
-    'dixon-coles',
+    rho * 0.65,
+    'ensemble',
     sport,
     alpha,
     mlFeatures,
-    bivariateCov * 0.5,
+    bivariateCov * 0.75,
     homeElo,
-    awayElo
+    awayElo,
+    league
   );
 
-  const bias = (seededUnit(seedKey + '-bias') - 0.5) * 0.11;
+  // Reduced synthetic pricing spread (±2.8%) to eliminate artificial false-consensus traps
+  const bias = (seededUnit(seedKey + '-bias') - 0.5) * 0.056;
   const nonPush = Math.max(0.1, marketDist.overProb + marketDist.underProb);
-  const fairOver = clamp(marketDist.overProb / nonPush + bias, 0.14, 0.86);
+  const fairOver = clamp(marketDist.overProb / nonPush + bias, 0.16, 0.84);
   const fairUnder = 1 - fairOver;
 
-  const vig = 1.024 + seededUnit(seedKey + '-vig') * 0.024;
+  const vig = 1.022 + seededUnit(seedKey + '-vig') * 0.022;
   const overOdds = clamp(round2(1 / (fairOver * vig)), 1.18, 5.2);
   const underOdds = clamp(round2(1 / (fairUnder * vig)), 1.18, 5.2);
-  const bookmaker = BOOKMAKERS[hashString(seedKey + '-bk') % BOOKMAKERS.length];
+  const bookmaker = realOdds?.bookmaker || BOOKMAKERS[hashString(seedKey + '-bk') % BOOKMAKERS.length];
 
   return {
     line,
@@ -410,7 +634,16 @@ function buildSyntheticMarketLine(
   };
 }
 
-function deriveTeamParams(homeTeam: string, awayTeam: string, sport: SportId, seed: string) {
+function deriveTeamParams(
+  homeTeam: string,
+  awayTeam: string,
+  sport: SportId,
+  seed: string,
+  league?: string,
+  homeSignals?: RealTeamSignals,
+  awaySignals?: RealTeamSignals,
+  realOdds?: RealEspnOdds
+) {
   const u1 = seededUnit(seed + homeTeam);
   const u2 = seededUnit(seed + awayTeam);
   const u3 = seededUnit(seed + 'pace');
@@ -420,6 +653,25 @@ function deriveTeamParams(homeTeam: string, awayTeam: string, sport: SportId, se
   const uEloH = seededUnit(homeTeam + '-elo');
   const uEloA = seededUnit(awayTeam + '-elo');
 
+  // Derive real Elo ratings from season W-L-D records + home/road splits + recent form when available
+  const computeRealElo = (
+    base: number,
+    span: number,
+    fallbackU: number,
+    sig?: RealTeamSignals
+  ): number => {
+    if (!sig || (sig.winPct === undefined && sig.formWinPct === undefined)) {
+      return Math.round(base + (fallbackU - 0.5) * span);
+    }
+    const w = sig.winPct ?? 0.5;
+    const split = sig.splitWinPct ?? w;
+    const form = sig.formWinPct ?? w;
+    const blended = w * 0.55 + split * 0.25 + form * 0.2;
+    const gamesConfidence = Math.min(1, (sig.gamesPlayed ?? 5) / 10);
+    const regressed = 0.5 + (blended - 0.5) * (0.45 + 0.55 * gamesConfidence);
+    return Math.round(base + (regressed - 0.5) * span);
+  };
+
   let homeLambda: number;
   let awayLambda: number;
   let rho: number;
@@ -427,47 +679,129 @@ function deriveTeamParams(homeTeam: string, awayTeam: string, sport: SportId, se
   let bivariateCov: number;
   let homeElo: number;
   let awayElo: number;
+  let paceIndex = round2(0.92 + u3 * 0.2);
+  let volatilityIndex = round2(0.1 + u4 * 0.18);
+  let shotQualityDiff = round2((u5 - 0.5) * 0.22);
+  let defensiveFragility = round2(0.92 + u6 * 0.2);
 
   if (sport === 'soccer') {
-    homeLambda = round2(1.05 + u1 * 1.18);
-    awayLambda = round2(0.76 + u2 * 1.0);
-    rho = round2(-0.042 - u4 * 0.062);
-    alpha = round2(0.09 + u4 * 0.16);
-    bivariateCov = round2(0.08 + u3 * 0.18);
-    homeElo = Math.round(1620 + uEloH * 360);
-    awayElo = Math.round(1600 + uEloA * 360);
+    const leagueKey = (league ?? '').trim().toLowerCase();
+    const leagueTotal = LEAGUE_SOCCER_TOTALS[leagueKey] ?? 2.82;
+    homeElo = computeRealElo(1740, 420, uEloH, homeSignals);
+    awayElo = computeRealElo(1720, 420, uEloA, awaySignals);
+
+    // Home advantage + Elo strength split + subtle matchup tempo variation
+    const eloDelta = clamp((homeElo + 55 - awayElo) / 600, -0.35, 0.35);
+    const homeShare = clamp(0.545 + eloDelta * 0.26, 0.36, 0.72);
+    const formTempoBoost =
+      homeSignals?.formWinPct !== undefined && awaySignals?.formWinPct !== undefined
+        ? ((homeSignals.formWinPct + awaySignals.formWinPct) - 1.0) * 0.16
+        : 0;
+    const adjustedTotal = clamp(
+      leagueTotal * (0.94 + u3 * 0.14) + formTempoBoost,
+      1.85,
+      3.95
+    );
+
+    homeLambda = round2(clamp(adjustedTotal * homeShare, 0.65, 2.85));
+    awayLambda = round2(clamp(adjustedTotal * (1 - homeShare), 0.55, 2.45));
+    rho = round2(-0.045 - u4 * 0.05);
+    alpha = round2(0.08 + u4 * 0.08);
+    bivariateCov = round2(0.09 + u3 * 0.14);
+    paceIndex = round2(clamp(adjustedTotal / 2.75, 0.85, 1.22));
+    defensiveFragility = round2(clamp(0.92 + (adjustedTotal - 2.65) * 0.18, 0.85, 1.22));
+    shotQualityDiff = round2(clamp((homeElo + awayElo - 3440) / 1600, -0.18, 0.18));
   } else if (sport === 'nba') {
-    homeLambda = round2(107.5 + u1 * 13.5);
-    awayLambda = round2(105.0 + u2 * 13.0);
+    homeElo = computeRealElo(1560, 380, uEloH, homeSignals);
+    awayElo = computeRealElo(1550, 380, uEloA, awaySignals);
+
+    // Use real ESPN team avgPoints when available, blended with league average (113.5 home / 110.5 away)
+    const baseHome = homeSignals?.avgPoints
+      ? homeSignals.avgPoints * 0.72 + 113.8 * 0.28 + 1.4
+      : 112.8 + (u1 - 0.5) * 9.5;
+    const baseAway = awaySignals?.avgPoints
+      ? awaySignals.avgPoints * 0.72 + 111.2 * 0.28 - 1.2
+      : 110.4 + (u2 - 0.5) * 9.0;
+
+    // Incorporate real spread when provided by ESPN
+    const spreadAdj = realOdds?.spread !== undefined ? clamp(-realOdds.spread * 0.25, -4.5, 4.5) : 0;
+    homeLambda = round2(clamp(baseHome + spreadAdj * 0.5, 98, 134));
+    awayLambda = round2(clamp(baseAway - spreadAdj * 0.5, 96, 132));
     rho = 0;
-    alpha = round2(0.02 + u4 * 0.03);
-    bivariateCov = round2(1.6 + u3 * 2.4);
-    homeElo = Math.round(1430 + uEloH * 310);
-    awayElo = Math.round(1420 + uEloA * 310);
+    alpha = round2(0.02 + u4 * 0.025);
+    bivariateCov = round2(1.4 + u3 * 1.8);
+
+    // Real pace & shooting quality from ESPN NBA statistics
+    if (homeSignals?.fgaPerGame && awaySignals?.fgaPerGame) {
+      const avgFga = (homeSignals.fgaPerGame + awaySignals.fgaPerGame) / 2;
+      paceIndex = round2(clamp(avgFga / 88.5, 0.88, 1.18));
+    }
+    if (homeSignals?.fgPct && awaySignals?.fgPct) {
+      const avgFg = (homeSignals.fgPct + awaySignals.fgPct) / 2;
+      shotQualityDiff = round2(clamp((avgFg - 46.8) / 18, -0.2, 0.2));
+    }
+    defensiveFragility = round2(clamp((homeLambda + awayLambda) / 224.0, 0.88, 1.18));
   } else if (sport === 'nhl') {
-    homeLambda = round2(2.65 + u1 * 1.15);
-    awayLambda = round2(2.35 + u2 * 1.05);
-    rho = round2(-0.02 - u4 * 0.035);
-    alpha = round2(0.12 + u4 * 0.15);
-    bivariateCov = round2(0.14 + u3 * 0.22);
-    homeElo = Math.round(1450 + uEloH * 260);
-    awayElo = Math.round(1440 + uEloA * 260);
+    homeElo = computeRealElo(1555, 320, uEloH, homeSignals);
+    awayElo = computeRealElo(1545, 320, uEloA, awaySignals);
+
+    // Recalibrated NHL scoring baseline (~6.40 total goals) using real season GPG & opponent savePct
+    const homeOff = homeSignals?.goalsPerGame
+      ? homeSignals.goalsPerGame * 0.68 + 3.25 * 0.32
+      : 3.28 + (u1 - 0.5) * 0.75;
+    const awayOff = awaySignals?.goalsPerGame
+      ? awaySignals.goalsPerGame * 0.68 + 3.05 * 0.32
+      : 3.06 + (u2 - 0.5) * 0.7;
+
+    // Opponent goalie save% directly shifts expected goals (league avg ~0.903)
+    const awayDefFactor = awaySignals?.savePct ? clamp(1 + (0.903 - awaySignals.savePct) * 6.5, 0.85, 1.18) : 1;
+    const homeDefFactor = homeSignals?.savePct ? clamp(1 + (0.903 - homeSignals.savePct) * 6.5, 0.85, 1.18) : 1;
+
+    homeLambda = round2(clamp(homeOff * awayDefFactor + 0.08, 2.25, 4.45));
+    awayLambda = round2(clamp(awayOff * homeDefFactor - 0.05, 2.05, 4.2));
+    rho = round2(-0.015 - u4 * 0.02);
+    alpha = round2(0.08 + u4 * 0.07);
+    bivariateCov = round2(0.16 + u3 * 0.2);
+    paceIndex = round2(clamp((homeLambda + awayLambda) / 6.35, 0.88, 1.2));
+    defensiveFragility = round2(clamp((awayDefFactor + homeDefFactor) / 2, 0.88, 1.2));
+    shotQualityDiff = round2(
+      clamp(((homeSignals?.plusMinusPerGame ?? 0) + (awaySignals?.plusMinusPerGame ?? 0)) * 0.08, -0.18, 0.18)
+    );
   } else {
-    // football (NFL / NCAAF)
-    homeLambda = round2(20.5 + u1 * 9.5);
-    awayLambda = round2(18.5 + u2 * 9.0);
+    // football: cleanly separate NFL (~46.2 pts) vs NCAAF (~54.6 pts)
+    const isCollege = typeof league === 'string' && /ncaa|college/i.test(league);
+    homeElo = computeRealElo(isCollege ? 1520 : 1560, isCollege ? 440 : 340, uEloH, homeSignals);
+    awayElo = computeRealElo(isCollege ? 1510 : 1550, isCollege ? 440 : 340, uEloA, awaySignals);
+
+    const baseTotal = isCollege ? 54.4 : 46.2;
+    const spreadAdj = realOdds?.spread !== undefined ? clamp(-realOdds.spread * 0.32, -8, 8) : 0;
+    const eloSplit = clamp((homeElo + 45 - awayElo) / 500, -0.25, 0.25);
+    const winRateTempo =
+      homeSignals?.winPct !== undefined && awaySignals?.winPct !== undefined
+        ? ((homeSignals.winPct + awaySignals.winPct) - 1.0) * (isCollege ? 5.5 : 3.2)
+        : 0;
+    const matchTotal = clamp(
+      baseTotal + (u3 - 0.5) * (isCollege ? 11.0 : 7.5) + winRateTempo,
+      isCollege ? 38 : 34,
+      isCollege ? 72 : 58
+    );
+
+    const homeShare = clamp(0.525 + eloSplit * 0.22, 0.35, 0.7);
+    homeLambda = round2(clamp(matchTotal * homeShare + spreadAdj * 0.4, 13, 44));
+    awayLambda = round2(clamp(matchTotal * (1 - homeShare) - spreadAdj * 0.4, 11, 41));
     rho = 0;
-    alpha = round2(0.06 + u4 * 0.07);
-    bivariateCov = round2(1.0 + u3 * 1.6);
-    homeElo = Math.round(1440 + uEloH * 320);
-    awayElo = Math.round(1430 + uEloA * 320);
+    alpha = round2(isCollege ? 0.07 + u4 * 0.05 : 0.045 + u4 * 0.04);
+    bivariateCov = round2(isCollege ? 1.3 + u3 * 1.4 : 0.9 + u3 * 1.1);
+    paceIndex = round2(clamp(matchTotal / baseTotal, 0.88, 1.2));
+    defensiveFragility = round2(clamp(0.94 + (matchTotal - baseTotal) / 40, 0.86, 1.22));
+    shotQualityDiff = round2(clamp(((homeSignals?.winPct ?? 0.5) + (awaySignals?.winPct ?? 0.5) - 1) * 0.24, -0.2, 0.2));
   }
 
   const mlFeatures: MatchMlFeatures = {
-    paceIndex: round2(0.88 + u3 * 0.34),
-    volatilityIndex: round2(0.08 + u4 * 0.28),
-    shotQualityDiff: round2((u5 - 0.5) * 0.34),
-    defensiveFragility: round2(0.88 + u6 * 0.32),
+    paceIndex,
+    volatilityIndex,
+    shotQualityDiff,
+    defensiveFragility,
     restAdvantage: Math.round((seededUnit(seed + 'rest') - 0.5) * 3),
   };
 
@@ -476,14 +810,16 @@ function deriveTeamParams(homeTeam: string, awayTeam: string, sport: SportId, se
 
 function getLinesForSport(sport: SportId, expectedTotal: number): number[] {
   if (sport === 'soccer') {
-    return expectedTotal >= 2.85 ? [2.5, 3.5] : [1.5, 2.5];
+    if (expectedTotal >= 3.05) return [2.5, 3.5];
+    if (expectedTotal <= 2.15) return [2.5, 1.5];
+    return [2.5];
   }
   if (sport === 'nba') {
     const base = Math.round(expectedTotal) + 0.5;
     return [base];
   }
   if (sport === 'nhl') {
-    return expectedTotal >= 6.1 ? [5.5, 6.5] : [5.5];
+    return expectedTotal >= 6.25 ? [6.5, 5.5] : [5.5];
   }
   // football (NFL / NCAAF)
   const base = Math.round(expectedTotal) + 0.5;
@@ -1055,6 +1391,9 @@ interface FinishedMatchRecord {
   awayScore: number;
   date: string;
   overUnder?: number;
+  homeSignals?: RealTeamSignals;
+  awaySignals?: RealTeamSignals;
+  realOdds?: RealEspnOdds;
 }
 
 interface EspnFetchResult {
@@ -1148,20 +1487,8 @@ async function fetchFromEspnLiveApi(): Promise<EspnFetchResult> {
           date: string;
           status?: { type?: { state?: string; shortDetail?: string } };
           competitions?: Array<{
-            competitors?: Array<{
-              homeAway?: string;
-              score?: string;
-              form?: string;
-              records?: Array<{ summary?: string; type?: string }>;
-              team?: {
-                displayName?: string;
-                abbreviation?: string;
-                logo?: string;
-                color?: string;
-                alternateColor?: string;
-              };
-            }>;
-            odds?: Array<{ overUnder?: number }>;
+            competitors?: EspnCompetitorRaw[];
+            odds?: EspnOddsRaw[];
           }>;
         }>;
       };
@@ -1177,6 +1504,10 @@ async function fetchFromEspnLiveApi(): Promise<EspnFetchResult> {
         const homeName = home?.team?.displayName;
         const awayName = away?.team?.displayName;
         if (!homeName || !awayName) continue;
+
+        const homeSignals = extractRealTeamSignals(home, ep.sport);
+        const awaySignals = extractRealTeamSignals(away, ep.sport);
+        const realOdds = extractRealEspnOdds(comp?.odds);
 
         if (state === 'post') {
           const finKey = `${ep.sport}:${ev.id}`;
@@ -1202,7 +1533,10 @@ async function fetchFromEspnLiveApi(): Promise<EspnFetchResult> {
                 homeScore: hScore,
                 awayScore: aScore,
                 date: ev.date,
-                overUnder: comp?.odds?.[0]?.overUnder,
+                overUnder: realOdds?.overUnder,
+                homeSignals,
+                awaySignals,
+                realOdds,
               });
             }
           }
@@ -1230,15 +1564,25 @@ async function fetchFromEspnLiveApi(): Promise<EspnFetchResult> {
         seenIds.add(uniqueId);
         addedForEndpointDay += 1;
 
-        const params = deriveTeamParams(homeName, awayName, ep.sport, ev.id);
-        const espnOverUnder = comp?.odds?.[0]?.overUnder;
+        const params = deriveTeamParams(
+          homeName,
+          awayName,
+          ep.sport,
+          ev.id,
+          ep.league,
+          homeSignals,
+          awaySignals,
+          realOdds
+        );
+        const espnOverUnder = realOdds?.overUnder;
         let homeL = params.homeLambda;
         let awayL = params.awayLambda;
 
         if (typeof espnOverUnder === 'number' && espnOverUnder > 0) {
-          const driftSpan = ep.sport === 'nba' ? 5.0 : ep.sport === 'football' ? 3.2 : 0.35;
-          const target = espnOverUnder + (seededUnit(ev.id + '-ou') - 0.5) * driftSpan;
-          const scale = target / Math.max(0.5, homeL + awayL);
+          // Blend our statistical total estimate (35%) with real market over/under anchor (65%)
+          const modelTotal = homeL + awayL;
+          const blendedTotal = espnOverUnder * 0.65 + modelTotal * 0.35;
+          const scale = blendedTotal / Math.max(0.5, modelTotal);
           homeL = round2(homeL * scale);
           awayL = round2(awayL * scale);
         }
@@ -1260,7 +1604,9 @@ async function fetchFromEspnLiveApi(): Promise<EspnFetchResult> {
             params.mlFeatures,
             ep.sport,
             lv,
-            `espn-${ev.id}-${lv}`
+            `espn-${ev.id}-${lv}`,
+            realOdds,
+            ep.league
           )
         );
 
@@ -1812,14 +2158,23 @@ async function startServer() {
   const AUDIT_CACHE_TTL_MS = 8 * 60 * 1000;
 
   function buildFinishedAuditMatch(rec: FinishedMatchRecord): FinishedAuditMatch {
-    const params = deriveTeamParams(rec.homeTeam, rec.awayTeam, rec.sport, rec.eventId);
+    const params = deriveTeamParams(
+      rec.homeTeam,
+      rec.awayTeam,
+      rec.sport,
+      rec.eventId,
+      rec.league,
+      rec.homeSignals,
+      rec.awaySignals,
+      rec.realOdds
+    );
     let homeL = params.homeLambda;
     let awayL = params.awayLambda;
 
     if (typeof rec.overUnder === 'number' && rec.overUnder > 0) {
-      const driftSpan = rec.sport === 'nba' ? 5.0 : rec.sport === 'football' ? 3.2 : 0.35;
-      const target = rec.overUnder + (seededUnit(rec.eventId + '-ou') - 0.5) * driftSpan;
-      const scale = target / Math.max(0.5, homeL + awayL);
+      const modelTotal = homeL + awayL;
+      const blendedTotal = rec.overUnder * 0.65 + modelTotal * 0.35;
+      const scale = blendedTotal / Math.max(0.5, modelTotal);
       homeL = round2(homeL * scale);
       awayL = round2(awayL * scale);
     }
@@ -1840,7 +2195,9 @@ async function startServer() {
       params.mlFeatures,
       rec.sport,
       lineValue,
-      `espn-${rec.eventId}-${lineValue}`
+      `espn-${rec.eventId}-${lineValue}`,
+      rec.realOdds,
+      rec.league
     );
 
     return {
@@ -1902,17 +2259,8 @@ async function startServer() {
             date: string;
             status?: { type?: { state?: string } };
             competitions?: Array<{
-              competitors?: Array<{
-                homeAway?: string;
-                score?: string;
-                team?: {
-                  displayName?: string;
-                  abbreviation?: string;
-                  logo?: string;
-                  color?: string;
-                };
-              }>;
-              odds?: Array<{ overUnder?: number }>;
+              competitors?: EspnCompetitorRaw[];
+              odds?: EspnOddsRaw[];
             }>;
           }>;
         };
@@ -1936,6 +2284,10 @@ async function startServer() {
           const normalizeHex = (raw?: string) =>
             raw && /^[0-9a-fA-F]{6}$/.test(raw) ? `#${raw}` : undefined;
 
+          const homeSignals = extractRealTeamSignals(home, ep.sport);
+          const awaySignals = extractRealTeamSignals(away, ep.sport);
+          const realOdds = extractRealEspnOdds(comp?.odds);
+
           byKey.set(finKey, {
             eventId: ev.id,
             sport: ep.sport,
@@ -1951,7 +2303,10 @@ async function startServer() {
             homeScore: hScore,
             awayScore: aScore,
             date: ev.date,
-            overUnder: comp?.odds?.[0]?.overUnder,
+            overUnder: realOdds?.overUnder,
+            homeSignals,
+            awaySignals,
+            realOdds,
           });
         }
       } catch {
