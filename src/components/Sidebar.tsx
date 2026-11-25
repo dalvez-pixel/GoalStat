@@ -3,6 +3,7 @@ import {
   BarChart3,
   Bell,
   ChevronDown,
+  ChevronRight,
   ClipboardCheck,
   Cloud,
   Download,
@@ -12,13 +13,17 @@ import {
   LogIn,
   LogOut,
   Moon,
+  Pin,
+  PinOff,
   Radio,
   Sun,
   Wallet,
   X,
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { SportId } from '../types/quant.ts';
+
+const SIDEBAR_AUTOHIDE_KEY = 'lq_sidebar_autohide_v1';
 
 export type WorkspaceTab =
   | 'opportunities'
@@ -108,12 +113,72 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [autoHide, setAutoHide] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(SIDEBAR_AUTOHIDE_KEY);
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [desktopHovered, setDesktopHovered] = useState(false);
+  const hideTimerRef = useRef<number | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setAvatarFailed(false);
   }, [authUser?.photoURL]);
-  const navContent = (
-    <div className="flex h-full flex-col glass-surface border-r border-slate-900/[0.08] dark:border-white/[0.08]">
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_AUTOHIDE_KEY, String(autoHide));
+    } catch {
+      // Ignore storage errors
+    }
+  }, [autoHide]);
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleDesktopEnter = () => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    setDesktopHovered(true);
+  };
+
+  const handleDesktopLeave = () => {
+    if (!autoHide) return;
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+    }
+    hideTimerRef.current = window.setTimeout(() => {
+      setDesktopHovered(false);
+      hideTimerRef.current = null;
+    }, 180);
+  };
+
+  const handleToggleAutoHide = () => {
+    setAutoHide((prev) => {
+      const next = !prev;
+      if (next) {
+        setDesktopHovered(true);
+      }
+      return next;
+    });
+  };
+
+  const renderNavContent = (isFloatingDesktop: boolean) => (
+    <div
+      className={`flex h-full flex-col glass-surface border-r border-slate-900/[0.08] dark:border-white/[0.08] ${
+        isFloatingDesktop ? 'bg-white/92 dark:bg-[#0d0f11]/92 shadow-2xl' : ''
+      }`}
+    >
       {/* Brand Zone */}
       <div className="flex h-16 items-center justify-between px-6 border-b border-slate-900/[0.08] dark:border-white/[0.08] shrink-0">
         <button
@@ -126,14 +191,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           LambdaQuant
         </button>
-        <button
-          type="button"
-          onClick={onCloseMobile}
-          aria-label="Cerrar menú"
-          className="md:hidden p-2 text-slate-400 hover:text-slate-100 rounded-md"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleToggleAutoHide}
+            title={
+              autoHide
+                ? 'Fijar menú lateral'
+                : 'Ocultar menú automáticamente al quitar el puntero'
+            }
+            aria-label={
+              autoHide
+                ? 'Fijar menú lateral'
+                : 'Ocultar menú automáticamente al quitar el puntero'
+            }
+            aria-pressed={!autoHide}
+            className={`hidden md:inline-flex items-center justify-center p-1.5 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F] ${
+              !autoHide
+                ? 'text-slate-900 bg-slate-900/[0.07] dark:text-[#ABF43F] dark:bg-white/[0.08]'
+                : 'text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.06] dark:text-slate-400 dark:hover:text-[#ABF43F] dark:hover:bg-white/[0.07]'
+            }`}
+          >
+            {autoHide ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            aria-label="Cerrar menú"
+            className="md:hidden p-2 text-slate-400 hover:text-slate-100 rounded-md"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       {/* Unified Single-Column Scrollable Sidebar Body */}
@@ -414,9 +503,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Desktop fixed rail (>= 768px) */}
-      <aside className="hidden md:block w-[264px] shrink-0 h-screen sticky top-0 z-20 overflow-visible">
-        {navContent}
+      {/* Desktop Left-Edge Hover Sensor & Handle when Auto-Hide is active (>= 768px) */}
+      {autoHide && !desktopHovered && (
+        <div
+          onMouseEnter={handleDesktopEnter}
+          className="hidden md:flex fixed top-0 left-0 bottom-0 w-4 z-40 items-center"
+        >
+          <button
+            type="button"
+            onClick={handleDesktopEnter}
+            aria-label="Mostrar menú lateral"
+            title="Mostrar menú lateral"
+            className="h-16 w-4 rounded-r-lg flex items-center justify-center border-y border-r border-slate-900/12 dark:border-white/15 bg-white/85 dark:bg-[#131517]/90 backdrop-blur-md shadow-md text-slate-600 hover:text-slate-950 dark:text-[#ABF43F] transition-all duration-200 hover:w-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ABF43F]"
+          >
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          </button>
+        </div>
+      )}
+
+      {/* Desktop Sidebar (>= 768px) — Auto-hides when pointer leaves or stays pinned */}
+      <aside
+        onMouseEnter={autoHide ? handleDesktopEnter : undefined}
+        onMouseLeave={autoHide ? handleDesktopLeave : undefined}
+        className={
+          autoHide
+            ? `hidden md:block fixed top-0 left-0 h-screen w-[264px] z-40 overflow-visible transition-transform duration-200 ease-out ${
+                desktopHovered
+                  ? 'translate-x-0 pointer-events-auto'
+                  : '-translate-x-full pointer-events-none'
+              }`
+            : 'hidden md:block w-[264px] shrink-0 h-screen sticky top-0 z-20 overflow-visible'
+        }
+      >
+        {renderNavContent(autoHide)}
       </aside>
 
       {/* Mobile Slide-over Drawer (< 768px) — High-contrast iOS Safari crystal panel */}
@@ -428,7 +547,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             aria-hidden="true"
           />
           <aside className="dark relative z-[60] w-[280px] max-w-[84vw] h-full mobile-drawer-panel text-slate-100 shadow-2xl">
-            {navContent}
+            {renderNavContent(false)}
           </aside>
         </div>
       )}
