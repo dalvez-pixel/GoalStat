@@ -1,4 +1,4 @@
-import { Check, FlaskConical, RefreshCw } from 'lucide-react';
+import { Check, FlaskConical, GitCompareArrows, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import {
   Bar,
@@ -17,13 +17,24 @@ import type {
   BankrollConfig,
   BetRecord,
   BetSide,
+  LiveMatch,
   MatchMlFeatures,
   ModelType,
   SportId,
 } from '../types/quant.ts';
+import {
+  SportAlgorithmMatrix,
+  type LoadedMatchSimulation,
+} from './SportAlgorithmMatrix.tsx';
 
 interface ModelLabViewProps {
   theme: 'dark' | 'light';
+  matches: LiveMatch[];
+  loadingMarkets: boolean;
+  timeZone: string;
+  tzLabel: string;
+  sportFilter: SportId | 'all';
+  onChangeSportFilter: (sport: SportId | 'all') => void;
   currentBankroll: number;
   bankrollConfig: BankrollConfig;
   currencySymbol: string;
@@ -149,12 +160,19 @@ const ALL_MODELS: ModelType[] = [
 
 export const ModelLabView: React.FC<ModelLabViewProps> = ({
   theme,
+  matches,
+  loadingMarkets,
+  timeZone,
+  tzLabel,
+  sportFilter,
+  onChangeSportFilter,
   currentBankroll,
   bankrollConfig,
   currencySymbol,
   onLogCustomBet,
 }) => {
   const chartTheme = useMemo(() => getChartTheme(theme), [theme]);
+  const [labMode, setLabMode] = useState<'comparative' | 'simulator'>('comparative');
   const [sport, setSport] = useState<SportId>('soccer');
   const [homeTeam, setHomeTeam] = useState(SPORT_PRESETS.soccer.homeTeam);
   const [awayTeam, setAwayTeam] = useState(SPORT_PRESETS.soccer.awayTeam);
@@ -196,6 +214,26 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
     setServerVerified(null);
   };
 
+  const handleLoadMatchIntoSimulator = (sim: LoadedMatchSimulation) => {
+    setSport(sim.sport);
+    setHomeTeam(sim.homeTeam);
+    setAwayTeam(sim.awayTeam);
+    setLeague(sim.league);
+    setHomeLambda(sim.homeLambda);
+    setAwayLambda(sim.awayLambda);
+    setHomeElo(sim.homeElo);
+    setAwayElo(sim.awayElo);
+    setBivariateCov(sim.bivariateCov);
+    setRho(sim.rho);
+    setAlpha(sim.alpha);
+    setLine(sim.line);
+    setOverOdds(sim.overOdds);
+    setUnderOdds(sim.underOdds);
+    setMlFeatures(sim.mlFeatures);
+    setServerVerified(null);
+    setLabMode('simulator');
+  };
+
   const modelRows = useMemo(() => {
     const impOver = 1 / Math.max(1.01, overOdds);
     const impUnder = 1 / Math.max(1.01, underOdds);
@@ -212,7 +250,8 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
         mlFeatures,
         bivariateCov,
         homeElo,
-        awayElo
+        awayElo,
+        league
       );
       const loseOver = Math.max(0, 1 - dist.overProb - dist.pushProb);
       const loseUnder = Math.max(0, 1 - dist.underProb - dist.pushProb);
@@ -254,6 +293,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
     rho,
     alpha,
     sport,
+    league,
     overOdds,
     underOdds,
     mlFeatures,
@@ -343,50 +383,103 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
 
   return (
     <div className="space-y-6 overflow-visible">
-      {/* Sport Preset Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] backdrop-blur-md border border-slate-900/[0.08] dark:border-white/[0.08]">
-          {(['soccer', 'nba', 'nhl', 'football'] as SportId[]).map((sid) => (
-            <button
-              key={sid}
-              type="button"
-              onClick={() => applyPreset(sid)}
-              className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                sport === sid
-                  ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-              }`}
-            >
-              {sid === 'soccer' ? 'Fútbol (Principal)' : SPORT_META[sid].name}
-            </button>
-          ))}
+      {/* Lab Mode Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-900/[0.08] dark:border-white/[0.08] pb-4">
+        <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-white/60 dark:bg-white/[0.04] backdrop-blur-md border border-slate-900/[0.08] dark:border-white/[0.08]">
+          <button
+            type="button"
+            onClick={() => setLabMode('comparative')}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              labMode === 'comparative'
+                ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+            }`}
+          >
+            <GitCompareArrows className="h-3.5 w-3.5" />
+            <span>Comparativa por Deporte (+EV)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setLabMode('simulator')}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              labMode === 'simulator'
+                ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+            }`}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            <span>Simulador Manual</span>
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={handleServerEvaluate}
-          disabled={verifying}
-          className="glass-card inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-xl text-slate-700 dark:text-slate-200 whitespace-nowrap"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${verifying ? 'animate-spin' : ''}`} />
-          <span>Validar cálculo en API</span>
-        </button>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          {labMode === 'comparative'
+            ? 'Asigna un algoritmo distinto a cada deporte y mide el impacto real en +EV antes de apostar.'
+            : 'Ajusta parámetros λ, Elo, covarianza λ₃, ρ, α y variables ML para simular un partido individual.'}
+        </p>
       </div>
 
-      {serverVerified && (
-        <div className="px-4 py-2.5 rounded-lg border border-[#ABF43F]/40 bg-[#ABF43F]/10 text-xs font-mono tabular-nums text-slate-900 dark:text-[#ABF43F]">
-          {serverVerified}
-        </div>
-      )}
+      {labMode === 'comparative' ? (
+        <SportAlgorithmMatrix
+          theme={theme}
+          matches={matches}
+          loadingMarkets={loadingMarkets}
+          timeZone={timeZone}
+          tzLabel={tzLabel}
+          sportFilter={sportFilter}
+          onChangeSportFilter={onChangeSportFilter}
+          currentBankroll={currentBankroll}
+          bankrollConfig={bankrollConfig}
+          currencySymbol={currencySymbol}
+          onLogCustomBet={onLogCustomBet}
+          onLoadMatchIntoSimulator={handleLoadMatchIntoSimulator}
+        />
+      ) : (
+        <div className="space-y-6 overflow-visible">
+          {/* Sport Preset Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-white/60 dark:bg-white/[0.04] backdrop-blur-md border border-slate-900/[0.08] dark:border-white/[0.08]">
+              {(['soccer', 'nba', 'nhl', 'football'] as SportId[]).map((sid) => (
+                <button
+                  key={sid}
+                  type="button"
+                  onClick={() => applyPreset(sid)}
+                  className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                    sport === sid
+                      ? 'bg-slate-900 text-white dark:bg-[#ABF43F] dark:text-[#090909]'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  {sid === 'soccer' ? 'Fútbol (Principal)' : SPORT_META[sid].name}
+                </button>
+              ))}
+            </div>
 
-      {savedNotice && (
-        <div className="px-4 py-2.5 rounded-lg border border-[#ABF43F]/40 bg-[#ABF43F]/10 text-xs font-medium text-slate-900 dark:text-[#ABF43F] flex items-center gap-2">
-          <Check className="h-4 w-4" />
-          <span>Pick registrado en tu historial de bankroll.</span>
-        </div>
-      )}
+            <button
+              type="button"
+              onClick={handleServerEvaluate}
+              disabled={verifying}
+              className="glass-card inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-xl text-slate-700 dark:text-slate-200 whitespace-nowrap"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${verifying ? 'animate-spin' : ''}`} />
+              <span>Validar cálculo en API</span>
+            </button>
+          </div>
 
-      {/* Main Split */}
+          {serverVerified && (
+            <div className="px-4 py-2.5 rounded-lg border border-[#ABF43F]/40 bg-[#ABF43F]/10 text-xs font-mono tabular-nums text-slate-900 dark:text-[#ABF43F]">
+              {serverVerified}
+            </div>
+          )}
+
+          {savedNotice && (
+            <div className="px-4 py-2.5 rounded-lg border border-[#ABF43F]/40 bg-[#ABF43F]/10 text-xs font-medium text-slate-900 dark:text-[#ABF43F] flex items-center gap-2">
+              <Check className="h-4 w-4" />
+              <span>Pick registrado en tu historial de bankroll.</span>
+            </div>
+          )}
+
+          {/* Main Split */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start overflow-visible">
         {/* Left: Quantitative, Elo & ML Feature Controls */}
         <div className="xl:col-span-5 border border-slate-200 rounded-xl bg-white glass-panel glass-panel-hover p-5 space-y-5">
@@ -849,6 +942,8 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
           </div>
         </div>
       </div>
+        </div>
+      )}
     </div>
   );
 };

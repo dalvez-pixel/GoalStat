@@ -1248,6 +1248,12 @@ export default function App() {
           {activeTab === 'model-lab' && (
             <ModelLabView
               theme={theme}
+              matches={matches}
+              loadingMarkets={loadingMarkets}
+              timeZone={activeTimeZone}
+              tzLabel={activeTzLabel}
+              sportFilter={selectedSport}
+              onChangeSportFilter={setSelectedSport}
               currentBankroll={currentBankroll}
               bankrollConfig={bankrollConfig}
               currencySymbol={currencySymbol}
